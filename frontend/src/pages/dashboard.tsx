@@ -1161,7 +1161,7 @@ function DashboardStyles() {
       .primeCard {
         position: relative;
         grid-row: span 2;
-        height: 344px;
+        height: 352px;
         min-height: 0;
         padding: 16px 18px 12px;
         overflow: hidden;
@@ -1248,13 +1248,13 @@ function DashboardStyles() {
       .primeMetrics {
         display: grid;
         grid-template-columns: repeat(4, minmax(0, 1fr));
-        grid-template-rows: 76px 92px;
-        gap: 10px 14px;
+        grid-template-rows: 108px 104px;
+        gap: 8px 14px;
         align-items: stretch;
       }
       .metricBlock {
         min-height: 0;
-        padding: 8px 0;
+        padding: 6px 0;
       }
       .metricBlock span {
         color: #2d65ff;
@@ -1278,6 +1278,7 @@ function DashboardStyles() {
         letter-spacing: -0.4px;
       }
       .metricBlock.compact {
+        grid-row: 2;
         grid-column: 1 / 2;
       }
       .metricBlock small,
@@ -1289,12 +1290,13 @@ function DashboardStyles() {
         font-weight: 800;
       }
       .sppBlock {
-        grid-column: span 2;
+        grid-row: 2;
+        grid-column: 2 / 4;
         min-height: 0;
         display: grid;
         place-content: center;
-        border-radius: 20px;
-        background: radial-gradient(circle, rgba(103, 214, 145, 0.20), transparent 64%);
+        border-radius: 16px;
+        background: radial-gradient(ellipse at center, rgba(103, 214, 145, 0.16), transparent 68%);
         text-align: center;
       }
       .sppBlock span,
@@ -1315,6 +1317,8 @@ function DashboardStyles() {
         font-weight: 800;
       }
       .donutBlock {
+        grid-row: 2;
+        grid-column: 4 / 5;
         display: grid;
         place-items: center;
         gap: 6px;
@@ -1342,10 +1346,10 @@ function DashboardStyles() {
         display: grid;
         grid-template-columns: 1fr 1fr;
         gap: 0;
-        margin: 3px -10px 0;
+        margin: 0 -10px 0;
       }
       .miniCurves svg {
-        height: 42px;
+        height: 36px;
       }
       .venueMetrics {
         display: grid;
