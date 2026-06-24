@@ -273,7 +273,7 @@ function HeroSummaryCard({
       <div className="heroMetric">
         <span>{periodLabel(period)}总收入（实收金额）</span>
         <strong>{currency(totalRevenue)}</strong>
-        <div>
+        <div className="heroBadges">
           <em>来自现有业务接口</em>
           <b>{periodLabel(period)}</b>
         </div>
@@ -329,7 +329,7 @@ function CinemaPrimeCard({
         <MetricBlock label="卖品（利润核心）" title="卖品收入" value={currency(concession)} note={card.dataNote} tone="green" />
         <MetricBlock label="客单价" title="客单价" value={`¥${(card.avgOrderValue || 0).toFixed(2)}`} note={card.dataNote} />
         <MetricBlock label="人次" title="人次" value={formatNumber(customers)} note={card.dataNote} />
-        <MetricBlock label="场次数" title="场次数" value={formatNumber(card.orders)} note={card.dataNote} />
+        <MetricBlock label="场次数" title="场次数" value={formatNumber(card.orders)} note={card.dataNote} compact />
         <div className="sppBlock">
           <span>SPP（每人卖品消费）</span>
           <strong>¥{spp.toFixed(2)}</strong>
@@ -348,9 +348,9 @@ function CinemaPrimeCard({
   );
 }
 
-function MetricBlock({ label, title, value, note, tone }: { label: string; title: string; value: string; note: string; tone?: "blue" | "green" }) {
+function MetricBlock({ label, title, value, note, tone, compact = false }: { label: string; title: string; value: string; note: string; tone?: "blue" | "green"; compact?: boolean }) {
   return (
-    <div className={`metricBlock ${tone || ""}`}>
+    <div className={`metricBlock ${tone || ""} ${compact ? "compact" : ""}`}>
       <span>{label}</span>
       <em>{title}</em>
       <strong>{value}</strong>
@@ -1060,11 +1060,12 @@ function DashboardStyles() {
       }
       .heroCard {
         position: relative;
-        min-height: 134px;
-        padding: 17px 22px 15px;
+        min-height: 138px;
+        padding: 18px 24px;
         display: grid;
-        grid-template-columns: 260px 320px minmax(210px, 1fr);
+        grid-template-columns: minmax(240px, 0.9fr) minmax(420px, 1.35fr) minmax(190px, 0.7fr);
         align-items: center;
+        gap: 24px;
         overflow: hidden;
         background:
           linear-gradient(100deg, rgba(255,255,255,0.92), rgba(245,248,255,0.78)),
@@ -1080,17 +1081,18 @@ function DashboardStyles() {
       }
       .heroMetric strong {
         display: block;
-        margin: 8px 0 10px;
-        font-size: 38px;
+        margin: 8px 0 9px;
+        font-size: 40px;
         line-height: 0.9;
         letter-spacing: -2px;
         color: #4d62f4;
         text-shadow: 0 12px 24px rgba(77, 98, 244, 0.22);
       }
-      .heroMetric div {
+      .heroBadges {
         display: flex;
-        gap: 16px;
+        gap: 10px;
         align-items: center;
+        flex-wrap: wrap;
       }
       .heroMetric em,
       .heroMetric b {
@@ -1113,13 +1115,21 @@ function DashboardStyles() {
       .heroStats {
         display: grid;
         grid-template-columns: repeat(3, 1fr);
-        gap: 20px;
+        gap: 12px;
+      }
+      .miniStat {
+        min-height: 74px;
+        padding: 10px 12px;
+        border-radius: 14px;
+        background: rgba(255, 255, 255, 0.42);
+        box-shadow: inset 0 0 0 1px rgba(232, 237, 252, 0.72);
       }
       .miniStat strong {
         display: block;
-        margin: 7px 0 7px;
-        font-size: 18px;
+        margin: 8px 0 6px;
+        font-size: 19px;
         color: #0c1220;
+        line-height: 1;
       }
       .miniStat strong.positive {
         color: #111;
@@ -1131,7 +1141,7 @@ function DashboardStyles() {
       }
       .heroVisual {
         justify-self: end;
-        max-width: 196px;
+        max-width: 180px;
         width: 100%;
         height: auto;
         object-fit: contain;
@@ -1144,21 +1154,21 @@ function DashboardStyles() {
       .mainGrid {
         display: grid;
         grid-template-columns: minmax(0, 1.36fr) minmax(330px, 1fr);
-        grid-template-rows: repeat(2, 158px);
+        grid-template-rows: repeat(2, 166px);
         gap: 12px;
         margin-top: 12px;
       }
       .primeCard {
         position: relative;
         grid-row: span 2;
-        height: 328px;
+        height: 344px;
         min-height: 0;
-        padding: 15px 18px 10px;
+        padding: 16px 18px 12px;
         overflow: hidden;
       }
       .venueCard {
         position: relative;
-        height: 158px;
+        height: 166px;
         min-height: 0;
         padding: 14px 16px 12px;
         overflow: hidden;
@@ -1238,10 +1248,13 @@ function DashboardStyles() {
       .primeMetrics {
         display: grid;
         grid-template-columns: repeat(4, minmax(0, 1fr));
-        gap: 7px 16px;
+        grid-template-rows: 76px 92px;
+        gap: 10px 14px;
+        align-items: stretch;
       }
       .metricBlock {
-        min-height: 62px;
+        min-height: 0;
+        padding: 8px 0;
       }
       .metricBlock span {
         color: #2d65ff;
@@ -1251,29 +1264,33 @@ function DashboardStyles() {
       }
       .metricBlock em {
         display: block;
-        margin-top: 9px;
+        margin-top: 8px;
         color: #5f6b85;
         font-style: normal;
-        font-size: 13px;
+        font-size: 12px;
       }
       .metricBlock strong {
         display: block;
         margin-top: 5px;
-        font-size: 18px;
+        font-size: 20px;
+        line-height: 1.05;
         color: #050914;
         letter-spacing: -0.4px;
+      }
+      .metricBlock.compact {
+        grid-column: 1 / 2;
       }
       .metricBlock small,
       .miniMetric em {
         display: block;
         margin-top: 5px;
         color: #24ad61;
-        font-size: 12px;
+        font-size: 11px;
         font-weight: 800;
       }
       .sppBlock {
         grid-column: span 2;
-        min-height: 72px;
+        min-height: 0;
         display: grid;
         place-content: center;
         border-radius: 20px;
@@ -1288,7 +1305,7 @@ function DashboardStyles() {
       }
       .sppBlock strong {
         margin-top: 5px;
-        font-size: 30px;
+        font-size: 32px;
         color: #44be73;
         letter-spacing: -2px;
       }
@@ -1300,7 +1317,7 @@ function DashboardStyles() {
       .donutBlock {
         display: grid;
         place-items: center;
-        gap: 7px;
+        gap: 6px;
         text-align: center;
       }
       .donut {
@@ -1325,31 +1342,41 @@ function DashboardStyles() {
         display: grid;
         grid-template-columns: 1fr 1fr;
         gap: 0;
-        margin: 0 -10px 0;
+        margin: 3px -10px 0;
       }
       .miniCurves svg {
-        height: 46px;
+        height: 42px;
       }
       .venueMetrics {
         display: grid;
         grid-template-columns: repeat(5, minmax(0, 1fr));
-        gap: 8px;
-        margin-bottom: 7px;
+        gap: 10px;
+        margin-bottom: 8px;
+      }
+      .miniMetric {
+        min-width: 0;
       }
       .miniMetric strong {
         display: block;
         margin: 4px 0 0;
-        font-size: 14px;
+        font-size: 15px;
+        line-height: 1.1;
+        white-space: nowrap;
+      }
+      .miniMetric em {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
       }
       .miniMetric em.down {
         color: #e1505d;
       }
       .progressRow {
         display: grid;
-        grid-template-columns: 70px 42px minmax(82px, 1fr) 76px;
+        grid-template-columns: 58px 42px minmax(90px, 1fr) 96px;
         align-items: center;
         gap: 8px;
-        margin-top: 5px;
+        margin-top: 6px;
         color: #64708c;
         font-size: 11px;
       }
