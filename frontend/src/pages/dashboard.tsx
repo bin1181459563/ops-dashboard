@@ -55,6 +55,8 @@ export default function DashboardPage() {
   const [state, setState] = useState<DashboardState>({});
   const [currentTime, setCurrentTime] = useState<Date | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [period, setPeriod] = useState("今日");
   const initialRefreshDone = useRef(false);
 
   const overview = state.overview?.data;
@@ -132,7 +134,7 @@ export default function DashboardPage() {
       <Head>
         <title>经营中心 - 翡翠城</title>
       </Head>
-      <main className="lightDashboard">
+      <main className={`lightDashboard ${sidebarCollapsed ? "navCollapsed" : ""}`}>
         <aside className="sideRail">
           <div className="brandLockup">
             <span className="brandMark">sf.</span>
@@ -152,7 +154,7 @@ export default function DashboardPage() {
             ].map(([label, href, icon, active]) => (
               <Link className={`navItem ${active ? "active" : ""}`} href={String(href)} key={String(label)}>
                 <span>{icon}</span>
-                {label}
+                <span className="navLabel">{label}</span>
               </Link>
             ))}
           </nav>
@@ -162,7 +164,9 @@ export default function DashboardPage() {
             <em>{dataStatusText(state.dataQuality?.data)}</em>
             <small>最后更新 {currentTime ? formatTime(currentTime) : "14:30"}</small>
           </div>
-          <button className="collapseMenu">‹ 收起菜单</button>
+          <button className="collapseMenu" onClick={() => setSidebarCollapsed((value) => !value)}>
+            {sidebarCollapsed ? "› 展开菜单" : "‹ 收起菜单"}
+          </button>
         </aside>
 
         <section className="dashboardStage">
@@ -172,8 +176,8 @@ export default function DashboardPage() {
               <p>数据更新时间：{currentTime ? formatFullDateTime(currentTime) : "2026-06-24 14:30"} <span /></p>
             </div>
             <div className="topControls">
-              <button>{formatControlDate(currentTime)}</button>
-              <button>{currentTime ? formatTime(currentTime) : "14:30"}</button>
+              <button onClick={() => setCurrentTime(new Date())}>{formatControlDate(currentTime)}</button>
+              <button onClick={() => setCurrentTime(new Date())}>{currentTime ? formatTime(currentTime) : "14:30"}</button>
               <button onClick={refreshAll} disabled={refreshing}>{refreshing ? "刷新中" : "刷新数据"}</button>
               <div className="ownerProfile">
                 <Image alt="老板头像" src="/images/dashboard-avatar-v2.png" width={34} height={34} />
@@ -192,9 +196,9 @@ export default function DashboardPage() {
           />
 
           <section className="mainGrid">
-            <CinemaPrimeCard card={cinema} cinema={overview?.cinema} />
-            <VenueMiniCard card={billiards} target={50000} />
-            <VenueMiniCard card={mahjong} target={37000} />
+            <CinemaPrimeCard card={cinema} cinema={overview?.cinema} period={period} onPeriodChange={setPeriod} />
+            <VenueMiniCard card={billiards} target={50000} period={period} onPeriodChange={setPeriod} />
+            <VenueMiniCard card={mahjong} target={37000} period={period} onPeriodChange={setPeriod} />
           </section>
 
           <section className="bottomGrid">
@@ -255,20 +259,31 @@ function MiniStat({ label, value, hint, positive = false }: { label: string; val
   );
 }
 
-function CinemaPrimeCard({ card, cinema }: { card: BusinessCard; cinema?: OverviewData["cinema"] }) {
+function CinemaPrimeCard({
+  card,
+  cinema,
+  period,
+  onPeriodChange,
+}: {
+  card: BusinessCard;
+  cinema?: OverviewData["cinema"];
+  period: string;
+  onPeriodChange: (value: string) => void;
+}) {
   const concession = cinema?.concession_revenue || Math.round(card.revenue * 0.33);
   const ticket = cinema?.box_office || Math.max(card.revenue - concession, 0);
   const customers = cinema?.customer_count || card.orders || 2856;
   const spp = customers ? concession / customers : 21.35;
   return (
     <section className="primeCard">
+      <Link className="cardJump" href={card.href} aria-label={`查看${card.label}详情`} />
       <div className="cardHeader">
         <div className="venueTitle">
           <span className="venueIcon purple">☷</span>
           <strong>影院（核心利润引擎）</strong>
           <em>核心业务</em>
         </div>
-        <button>今日⌄</button>
+        <PeriodSelect value={period} onChange={onPeriodChange} />
       </div>
       <div className="primeMetrics">
         <MetricBlock label="票房（流量）" title="票房收入" value={currency(ticket || 125620)} delta="↑ 9.3%" tone="blue" />
@@ -305,17 +320,28 @@ function MetricBlock({ label, title, value, delta, tone }: { label: string; titl
   );
 }
 
-function VenueMiniCard({ card, target }: { card: BusinessCard; target: number }) {
+function VenueMiniCard({
+  card,
+  target,
+  period,
+  onPeriodChange,
+}: {
+  card: BusinessCard;
+  target: number;
+  period: string;
+  onPeriodChange: (value: string) => void;
+}) {
   const monthly = Math.min(96, Math.max(18, (card.revenue / target) * 100));
   const yearly = Math.min(88, monthly * 0.78);
   return (
     <section className={`venueCard ${card.accent}`}>
+      <Link className="cardJump" href={card.href} aria-label={`查看${card.label}详情`} />
       <div className="cardHeader">
         <div className="venueTitle">
           <span className={`venueIcon ${card.accent}`}>{card.label.slice(0, 1)}</span>
           <strong>{card.label}</strong>
         </div>
-        <button>今日⌄</button>
+        <PeriodSelect value={period} onChange={onPeriodChange} />
       </div>
       <div className="venueMetrics">
         <MiniMetric label="收入" value={currency(card.revenue)} delta="↑ 6.2%" />
@@ -327,6 +353,16 @@ function VenueMiniCard({ card, target }: { card: BusinessCard; target: number })
       <ProgressRow label="月完成度" value={monthly} target={target} color={card.accent === "orange" ? "#ffad4d" : "#51bf72"} />
       <ProgressRow label="年完成度" value={yearly} target={target * 12} color={card.accent === "orange" ? "#ffad4d" : "#51bf72"} />
     </section>
+  );
+}
+
+function PeriodSelect({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+  return (
+    <select className="periodSelect" value={value} onChange={(event) => onChange(event.target.value)} aria-label="切换时间范围">
+      <option>今日</option>
+      <option>本周</option>
+      <option>本月</option>
+    </select>
   );
 }
 
@@ -451,7 +487,7 @@ function AiStrategyStrip({ decision }: { decision: DecisionModel }) {
         <strong>AI 经营洞察</strong>
       </div>
       <p>{decision.summary} {decision.actions[0] ? `建议优先执行：${decision.actions[0]}。` : decision.reportSummary}</p>
-      <button>查看详情 →</button>
+      <Link href="/dashboard/reports">查看详情 →</Link>
     </section>
   );
 }
@@ -704,6 +740,9 @@ function DashboardStyles() {
           linear-gradient(135deg, #f9fbff 0%, #f1f5ff 52%, #eef4ff 100%);
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
       }
+      .lightDashboard.navCollapsed {
+        grid-template-columns: 72px minmax(0, 1fr);
+      }
       .sideRail {
         position: sticky;
         top: 0;
@@ -723,6 +762,17 @@ function DashboardStyles() {
         padding: 0 10px;
         font-weight: 900;
         white-space: nowrap;
+      }
+      .navCollapsed .brandLockup strong,
+      .navCollapsed .navLabel,
+      .navCollapsed .syncBadge strong,
+      .navCollapsed .syncBadge em,
+      .navCollapsed .syncBadge small {
+        display: none;
+      }
+      .navCollapsed .brandLockup {
+        justify-content: center;
+        padding: 0;
       }
       .brandMark {
         color: #050914;
@@ -746,7 +796,11 @@ function DashboardStyles() {
         font-weight: 700;
         font-size: 12px;
       }
-      .navItem span {
+      .navCollapsed .navItem {
+        justify-content: center;
+        padding: 0;
+      }
+      .navItem > span:first-child {
         width: 24px;
         height: 24px;
         display: grid;
@@ -760,7 +814,7 @@ function DashboardStyles() {
         color: #3268ff;
         background: #e9efff;
       }
-      .navItem.active span {
+      .navItem.active > span:first-child {
         color: #fff;
         background: #3e6fff;
       }
@@ -794,6 +848,15 @@ function DashboardStyles() {
         color: #64708d;
         font-weight: 800;
         box-shadow: 0 16px 34px rgba(124, 139, 185, 0.14);
+        cursor: pointer;
+      }
+      .navCollapsed .collapseMenu {
+        width: 48px;
+        justify-self: center;
+        font-size: 0;
+      }
+      .navCollapsed .collapseMenu::first-letter {
+        font-size: 16px;
       }
       .dashboardStage {
         max-width: none;
@@ -846,6 +909,11 @@ function DashboardStyles() {
         color: #2b3550;
         font-weight: 800;
         box-shadow: 0 12px 28px rgba(121, 136, 180, 0.12);
+        cursor: pointer;
+      }
+      .topControls button:disabled {
+        cursor: wait;
+        opacity: 0.68;
       }
       .ownerProfile {
         gap: 9px;
@@ -958,6 +1026,7 @@ function DashboardStyles() {
         margin-top: 12px;
       }
       .primeCard {
+        position: relative;
         grid-row: span 2;
         height: 328px;
         min-height: 0;
@@ -965,10 +1034,40 @@ function DashboardStyles() {
         overflow: hidden;
       }
       .venueCard {
+        position: relative;
         height: 158px;
         min-height: 0;
         padding: 14px 16px 12px;
         overflow: hidden;
+      }
+      .cardJump {
+        position: absolute;
+        inset: 0;
+        z-index: 1;
+        border-radius: inherit;
+      }
+      .primeCard > :not(.cardJump),
+      .venueCard > :not(.cardJump) {
+        position: relative;
+        z-index: 2;
+        pointer-events: none;
+      }
+      .periodSelect {
+        pointer-events: auto;
+        border: 0;
+        border-radius: 11px;
+        background: #f4f7ff;
+        color: #6e7894;
+        height: 28px;
+        padding: 0 26px 0 12px;
+        font-weight: 800;
+        outline: none;
+        cursor: pointer;
+      }
+      .primeCard:hover,
+      .venueCard:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 28px 62px rgba(105, 125, 178, 0.18);
       }
       .cardHeader {
         justify-content: space-between;
@@ -1277,13 +1376,15 @@ function DashboardStyles() {
         color: #62708e;
         font-size: 14px;
       }
-      .aiStrip button {
-        border: 0;
+      .aiStrip a {
         height: 40px;
         border-radius: 18px;
         color: #3c64ff;
         background: #fff;
         font-weight: 900;
+        display: grid;
+        place-items: center;
+        text-decoration: none;
       }
       .detailsRow {
         display: grid;
