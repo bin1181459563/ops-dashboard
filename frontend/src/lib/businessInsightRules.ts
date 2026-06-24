@@ -26,6 +26,13 @@ const PRIORITY_ORDER: Record<BusinessInsightPriority, number> = {
   low: 2,
 };
 
+const BUSINESS_ORDER: Record<BusinessType, number> = {
+  billiards: 0,
+  mahjong: 1,
+  cinema: 2,
+  qgcloud: 3,
+};
+
 export function generateBusinessInsights(input: {
   summaries: BusinessSummary[];
   alerts: BusinessAlert[];
@@ -159,6 +166,8 @@ function compareInsights(a: BusinessInsight, b: BusinessInsight): number {
   if (scoreDiff !== 0) return scoreDiff;
   const priorityDiff = PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority];
   if (priorityDiff !== 0) return priorityDiff;
+  const businessDiff = BUSINESS_ORDER[a.businessType] - BUSINESS_ORDER[b.businessType];
+  if (businessDiff !== 0) return businessDiff;
   return a.title.localeCompare(b.title);
 }
 

@@ -67,6 +67,18 @@ const sortedInsights = generateBusinessInsights({
     { ...baseAlert, id: "mahjong-data-error", businessType: "mahjong", businessName: "棋牌", category: "system", title: "数据源异常", level: "danger" },
   ],
 });
+const deterministicTieInsights = generateBusinessInsights({
+  summaries: [
+    { ...baseSummary, businessType: "billiards", displayName: "台球", revenue: 0, orders: 0, customers: 0, status: "empty" },
+    { ...baseSummary, businessType: "mahjong", displayName: "棋牌", revenue: 0, orders: 0, customers: 0, status: "empty" },
+    { ...baseSummary, businessType: "cinema", displayName: "影院", revenue: 0, orders: 0, customers: 0, status: "empty" },
+  ],
+  alerts: [
+    { ...baseAlert, id: "billiards-data-empty", businessType: "billiards", businessName: "台球", category: "data", title: "暂无经营数据", level: "info", priorityScore: 28 },
+    { ...baseAlert, id: "mahjong-data-empty", businessType: "mahjong", businessName: "棋牌", category: "data", title: "暂无经营数据", level: "info", priorityScore: 28 },
+    { ...baseAlert, id: "cinema-data-empty", businessType: "cinema", businessName: "影院", category: "data", title: "暂无经营数据", level: "info", priorityScore: 28 },
+  ],
+});
 
 emptyInsights.length;
 dataInsights[0].priorityScore.toFixed(0);
@@ -78,6 +90,7 @@ cinemaInsights[0].actions[0].length;
 customerInsights[0].reason.length;
 sortedInsights[0].priorityScore >= sortedInsights[sortedInsights.length - 1].priorityScore;
 dataInsights.length <= 2;
+deterministicTieInsights.map((item) => item.businessType).join(",") === "billiards,mahjong,cinema";
 
 export function BusinessInsightRulesContract() {
   return null;

@@ -1,77 +1,97 @@
 import Head from "next/head";
+import Image from "next/image";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { RevenueTrendChart } from "../components/dashboard/RevenueTrendChart";
 import { generateBusinessAlerts } from "../lib/businessAlertRules";
 import type { BusinessAlert } from "../lib/businessAlertRules";
 import { generateBusinessInsights } from "../lib/businessInsightRules";
 import type { BusinessInsight } from "../lib/businessInsightRules";
 import { toOverviewBusinessSummaries } from "../lib/businessAdapters";
-import { DATA_MODE, askAiAssistant, createAutomationTask, fetchAlerts, fetchAiAnomalies, fetchAiMonthlyReport, fetchAiWeeklyReport, fetchAutomationTasks, fetchDailyReport, fetchDataQualitySummary, fetchDataSourcesStatus, fetchOrders, fetchOrderSnapshots, fetchOverview, fetchRevenue, fetchUsage, runCollect } from "../lib/dashboardApi";
-import type { AutomationTask } from "../lib/dashboardApi";
-import type { AiAnomaly, AlertItem, DashboardState, DataQualitySummary, DataSourcePlatformStatus, OverviewData } from "../types/dashboard";
+import { buildBusinessReportSections } from "../lib/businessReportRules";
+import {
+  DATA_MODE,
+  fetchDailyReport,
+  fetchDataQualitySummary,
+  fetchDataSourcesStatus,
+  fetchOverview,
+  runCollect,
+} from "../lib/dashboardApi";
+import type { AlertItem, DashboardState, DataQualitySummary, DataSourcePlatformStatus, OverviewData } from "../types/dashboard";
 
-type AiPriority = "高" | "中" | "低";
+type RiskLevel = "low" | "medium" | "high";
+type Accent = "blue" | "green" | "orange";
 
 interface BusinessCard {
   label: string;
   href: string;
-  status: string;
   revenue: number;
-  ordersLabel: string;
-  peopleLabel: string;
-  accent: "blue" | "green" | "gold";
+  orders: number;
+  utilizationRate: number | null;
+  avgOrderValue: number;
+  accent: Accent;
 }
 
-interface AiInsight {
+interface DecisionModel {
+  summary: string;
+  riskLevel: RiskLevel;
+  issues: BusinessAlert[];
+  actions: string[];
+  reportSummary: string;
+}
+
+interface AiInsightItem {
   title: string;
   detail: string;
   impact: string;
-  tone: "blue" | "green" | "gold" | "red";
 }
 
-interface AiTask {
-  type: string;
+interface AiTaskItem {
   title: string;
-  venue: string;
-  priority: AiPriority;
-  status: "待处理" | "处理中" | "已完成";
   action: string;
-  due: string;
+  priority: "高" | "中" | "低";
 }
 
 export default function DashboardPage() {
   const [state, setState] = useState<DashboardState>({});
   const [currentTime, setCurrentTime] = useState<Date | null>(null);
-  const [systemStatus, setSystemStatus] = useState(DATA_MODE === "mock" ? "mock" : "正常");
   const [refreshing, setRefreshing] = useState(false);
-  const [question, setQuestion] = useState("");
-  const [aiAnswer, setAiAnswer] = useState("");
-  const [aiAnswerMeta, setAiAnswerMeta] = useState("");
-  const [aiAsking, setAiAsking] = useState(false);
-  const [automationTasks, setAutomationTasks] = useState<AutomationTask[]>([]);
-  const [dispatchingTask, setDispatchingTask] = useState("");
   const initialRefreshDone = useRef(false);
 
   const overview = state.overview?.data;
-  const alerts = state.alerts?.data || overview?.alerts || [];
   const dailyReport = state.dailyReport?.data.report;
+  const summaries = useMemo(() => toOverviewBusinessSummaries(overview), [overview]);
   const businessCards = useMemo(() => getBusinessCards(overview), [overview]);
-  const businessAlerts = useMemo(() => generateBusinessAlerts(toOverviewBusinessSummaries(overview)).slice(0, 5), [overview]);
-  const businessInsights = useMemo(
-    () => generateBusinessInsights({ summaries: toOverviewBusinessSummaries(overview), alerts: businessAlerts }).slice(0, 3),
-    [overview, businessAlerts],
+  const businessAlerts = useMemo(() => selectTopAlerts(generateBusinessAlerts(summaries), 20), [summaries]);
+  const topAlerts = useMemo(() => selectTopAlerts(businessAlerts, 3), [businessAlerts]);
+  const businessInsights = useMemo(() => generateBusinessInsights({ summaries, alerts: businessAlerts }), [summaries, businessAlerts]);
+  const topInsights = useMemo(() => selectTopInsights(businessInsights, 3), [businessInsights]);
+  const totalCustomers = calculateCustomerTotal(overview);
+  const availableRooms = roomsAvailable(overview);
+  const reportSections = useMemo(
+    () => buildBusinessReportSections({
+      reportType: "daily",
+      reportDate: currentTime?.toISOString().slice(0, 10) || "2026-06-24",
+      summary: {
+        total_revenue: overview?.total_revenue || 0,
+        total_orders: overview?.total_orders || 0,
+        total_customers: totalCustomers,
+      },
+      businesses: businessCards.map((item) => ({
+        name: item.label,
+        venue: item.label,
+        revenue: item.revenue,
+        orders: item.orders,
+        customers: 0,
+      })),
+      insights: topInsights,
+      baseReport: dailyReport,
+    }),
+    [businessCards, currentTime, dailyReport, overview, topInsights, totalCustomers],
   );
-  const insights = useMemo(() => buildAiInsights(overview, alerts, dailyReport), [overview, alerts, dailyReport]);
-  const tasks = useMemo(() => buildAiTasks(overview, alerts), [overview, alerts]);
-  const healthScore = calculateHealthScore(overview, alerts, systemStatus);
-  const customerTotal = calculateCustomerTotal(overview);
-
-  const source = (() => {
-    const sources = [state.overview?.source, state.revenue?.source, state.orders?.source, state.usage?.source, state.alerts?.source].filter(Boolean);
-    const uniqueSources = Array.from(new Set(sources));
-    return uniqueSources.includes("mixed") || uniqueSources.length > 1 ? "mixed" : uniqueSources[0] || DATA_MODE;
-  })();
+  const decision = useMemo(
+    () => buildDecisionModel({ overview, alerts: topAlerts, insights: topInsights, report: dailyReport, reportHeadline: reportSections.headline }),
+    [dailyReport, overview, reportSections.headline, topAlerts, topInsights],
+  );
 
   const refreshAll = useCallback(async () => {
     if (refreshing) return;
@@ -79,52 +99,19 @@ export default function DashboardPage() {
     setCurrentTime(new Date());
     try {
       await runCollect().catch(() => {});
-      const results = await Promise.allSettled([
+      const [overviewResult, sourcesResult, reportResult, qualityResult] = await Promise.allSettled([
         fetchOverview(),
-        fetchRevenue(),
-        fetchOrders(),
-        fetchUsage(),
-        fetchAlerts(),
-        fetchOrderSnapshots(),
         fetchDataSourcesStatus(),
         fetchDailyReport(),
-        fetchAutomationTasks(),
         fetchDataQualitySummary(),
-        fetchAiAnomalies(),
       ] as const);
-      const [overviewResult, revenueResult, ordersResult, usageResult, alertsResult, orderSnapshotsResult, dataSourcesResult, dailyReportResult, automationResult, dataQualityResult, aiAnomaliesResult] = results;
-      const nextOverview = overviewResult.status === "fulfilled" ? overviewResult.value : undefined;
-      const revenue = revenueResult.status === "fulfilled" ? revenueResult.value : undefined;
-      const orders = ordersResult.status === "fulfilled" ? ordersResult.value : undefined;
-      const usage = usageResult.status === "fulfilled" ? usageResult.value : undefined;
-      const nextAlerts = alertsResult.status === "fulfilled" ? alertsResult.value : undefined;
-      const orderSnapshots = orderSnapshotsResult.status === "fulfilled" ? orderSnapshotsResult.value : undefined;
-      const dataSources = dataSourcesResult.status === "fulfilled" ? dataSourcesResult.value : undefined;
-      const report = dailyReportResult.status === "fulfilled" ? dailyReportResult.value : undefined;
-      const automation = automationResult.status === "fulfilled" ? automationResult.value : undefined;
-      const dataQuality = dataQualityResult.status === "fulfilled" ? dataQualityResult.value : undefined;
-      const aiAnomalies = aiAnomaliesResult.status === "fulfilled" ? aiAnomaliesResult.value : undefined;
       setState((previous) => ({
-        overview: nextOverview || previous.overview,
-        revenue: revenue || previous.revenue,
-        orders: orders || previous.orders,
-        usage: usage || previous.usage,
-        alerts: nextAlerts || previous.alerts,
-        orderSnapshots: orderSnapshots || previous.orderSnapshots,
-        dataSources: dataSources || previous.dataSources,
-        dailyReport: report || previous.dailyReport,
-        dataQuality: dataQuality || previous.dataQuality,
-        aiAnomalies: aiAnomalies || previous.aiAnomalies,
+        ...previous,
+        overview: overviewResult.status === "fulfilled" ? overviewResult.value : previous.overview,
+        dataSources: sourcesResult.status === "fulfilled" ? sourcesResult.value : previous.dataSources,
+        dailyReport: reportResult.status === "fulfilled" ? reportResult.value : previous.dailyReport,
+        dataQuality: qualityResult.status === "fulfilled" ? qualityResult.value : previous.dataQuality,
       }));
-      if (automation) setAutomationTasks(automation.data.tasks || []);
-      if (nextOverview) {
-        const failedCount = results.filter((result) => result.status === "rejected").length;
-        setSystemStatus(failedCount > 0 ? "部分异常" : nextOverview.source === "mock" && DATA_MODE === "api" ? "API回退" : DATA_MODE === "mock" ? "mock" : "正常");
-      } else {
-        setSystemStatus("异常");
-      }
-    } catch {
-      setSystemStatus("异常");
     } finally {
       setRefreshing(false);
     }
@@ -136,689 +123,522 @@ export default function DashboardPage() {
     refreshAll();
   }, []);
 
-  const askAi = async () => {
-    const value = question.trim();
-    if (!value) return;
-    setAiAsking(true);
-    setAiAnswer("");
-    setAiAnswerMeta("");
-    try {
-      const response = await askAiAssistant(value);
-      setAiAnswer(response.data.answer);
-      setAiAnswerMeta(`${response.data.model} · ${aiSourceLabel(response.data.source)}`);
-      setQuestion("");
-    } catch {
-      setAiAnswer("AI 助手暂时没有连上后端。请确认后端服务已启动，或稍后再试。");
-      setAiAnswerMeta("连接失败");
-    } finally {
-      setAiAsking(false);
-    }
-  };
-
-  const dispatchHermesTask = async (task: AiTask) => {
-    if (dispatchingTask) return;
-    setDispatchingTask(task.title);
-    try {
-      const response = await createAutomationTask({
-        task_type: automationTypeForTask(task),
-        title: task.title,
-        venue: task.venue,
-      });
-      setAutomationTasks((previous) => [response.data, ...previous].slice(0, 6));
-    } finally {
-      setDispatchingTask("");
-    }
-  };
+  const cinema = businessCards[0];
+  const billiards = businessCards[1];
+  const mahjong = businessCards[2];
 
   return (
     <>
       <Head>
-        <title>AI 经营管理系统 - 翡翠城</title>
+        <title>经营中心 - 翡翠城</title>
       </Head>
-      <main className="aiDashboardShell">
-        <aside className="aiSidebar">
-          <div className="aiBrand">
-            <div className="aiBrandMark">翡</div>
-            <div>
-              <strong>翡翠城</strong>
-              <span>AI 经营管理系统</span>
-            </div>
+      <main className="lightDashboard">
+        <aside className="sideRail">
+          <div className="brandLockup">
+            <span className="brandMark">sf.</span>
+            <strong>经营中心</strong>
           </div>
-          <nav className="aiNav">
+          <nav className="navStack">
             {[
-              ["今日经营中心", "/dashboard", true],
-              ["AI 预警", "/dashboard/alerts", false],
-              ["AI 报告", "/dashboard/reports", false],
-              ["客户唤醒", "/dashboard/customer-wake-up", false],
-              ["排片建议", "/dashboard/screening-suggestions", false],
-              ["收入预测", "/dashboard/revenue-forecast", false],
-              ["多业务联动", "/dashboard/cross-business", false],
-              ["数据可信度", "/dashboard/data-quality", false],
-              ["审计日志", "/dashboard/audit", false],
-            ].map(([label, href, active]) => (
-              <Link className={`aiNavItem ${active ? "active" : ""}`} href={String(href)} key={String(label)}>
-                <span>{String(label).slice(0, 1)}</span>
+              ["经营概览", "/dashboard", "⌂", true],
+              ["数据分析", "/dashboard/revenue-forecast", "▥", false],
+              ["门店/场馆", "/dashboard/cross-business", "▤", false],
+              ["商品管理", "/dashboard/concession", "▣", false],
+              ["营销活动", "/dashboard/screening-suggestions", "◇", false],
+              ["会员管理", "/dashboard/member", "♧", false],
+              ["财务管理", "/dashboard/profit", "▧", false],
+              ["报表中心", "/dashboard/reports", "▢", false],
+              ["系统设置", "/dashboard/data-quality", "⚙", false],
+            ].map(([label, href, icon, active]) => (
+              <Link className={`navItem ${active ? "active" : ""}`} href={String(href)} key={String(label)}>
+                <span>{icon}</span>
                 {label}
               </Link>
             ))}
           </nav>
-          <div className="aiStoreSwitch">
-            <span>当前门店</span>
-            <strong>翡翠城 · 总部</strong>
+          <div className="syncBadge">
+            <span>◎</span>
+            <strong>数据状态</strong>
+            <em>{dataStatusText(state.dataQuality?.data)}</em>
+            <small>最后更新 {currentTime ? formatTime(currentTime) : "14:30"}</small>
           </div>
+          <button className="collapseMenu">‹ 收起菜单</button>
         </aside>
 
-        <section className="aiWorkspace">
-          <header className="aiTopbar">
+        <section className="dashboardStage">
+          <header className="topBar">
             <div>
-              <span className="aiEyebrow">AI 今日经营中心</span>
-              <h1>老板，今天先看这三件事</h1>
+              <h1>老板，今天经营状况良好 👋</h1>
+              <p>数据更新时间：{currentTime ? formatFullDateTime(currentTime) : "2026-06-24 14:30"} <span /></p>
             </div>
-            <div className="aiTopMeta">
-              <span>{currentTime ? formatDateTime(currentTime) : "等待刷新"}</span>
-              <span>{sourceLabel(source)} · {systemStatus}</span>
-              <button className="aiRefreshButton" onClick={refreshAll} disabled={refreshing}>{refreshing ? "刷新中..." : "刷新数据"}</button>
+            <div className="topControls">
+              <button>{formatControlDate(currentTime)}</button>
+              <button>{currentTime ? formatTime(currentTime) : "14:30"}</button>
+              <button onClick={refreshAll} disabled={refreshing}>{refreshing ? "刷新中" : "刷新数据"}</button>
+              <div className="ownerProfile">
+                <Image alt="老板头像" src="/images/dashboard-avatar-v2.png" width={34} height={34} />
+                <strong>老板</strong>
+                <span>⌄</span>
+              </div>
             </div>
           </header>
 
-          <section className="aiKpiGrid">
-            <KpiCard label="今日总收入（元）" value={currency(overview?.total_revenue || 0)} delta="已计入台球 / 棋牌 / 影院" tone="gold" />
-            <KpiCard label="订单/场次（单·场）" value={formatNumber(overview?.total_orders || 0)} delta="经营动作总量" tone="blue" />
-            <KpiCard label="客流/人次（人）" value={formatNumber(customerTotal)} delta="含影院观影人次" tone="cyan" />
-            <KpiCard label="AI 健康分" value={`${healthScore} 分`} delta={healthScore >= 85 ? "经营状态良好" : "存在待处理事项"} tone="blue" />
+          <HeroSummaryCard
+            totalRevenue={overview?.total_revenue || 0}
+            totalOrders={overview?.total_orders || 0}
+            availableRooms={availableRooms}
+            decision={decision}
+            currentTime={currentTime}
+          />
+
+          <section className="mainGrid">
+            <CinemaPrimeCard card={cinema} cinema={overview?.cinema} />
+            <VenueMiniCard card={billiards} target={50000} />
+            <VenueMiniCard card={mahjong} target={37000} />
           </section>
 
-          <section className="aiBusinessGrid">
-            {businessCards.map((item) => (
-              <Link className={`aiBusinessCard accent-${item.accent}`} href={item.href} key={item.label}>
-                <div>
-                  <span className="statusDot" />
-                  <strong>{item.label}</strong>
-                  <em>{item.status}</em>
-                </div>
-                <b>{currency(item.revenue)}</b>
-                <footer>
-                  <span>{item.ordersLabel}</span>
-                  <span>{item.peopleLabel}</span>
-                </footer>
-              </Link>
-            ))}
+          <section className="bottomGrid">
+            <TrendCard cards={businessCards} />
+            <ProblemCard alerts={topAlerts} total={businessAlerts.length} />
+            <ActionCard insights={topInsights} total={businessInsights.length} />
           </section>
 
-          <section className="aiDataQualityGrid">
-            <DataQualityCard summary={state.dataQuality?.data} />
-            <AiAnomaliesCard anomalies={state.aiAnomalies?.data || []} businessAlerts={businessAlerts} />
-          </section>
-
-          <section className="aiMainGrid">
-            <div className="aiDataColumn">
-              <RevenueTrendChart />
-              <section className="aiPanel aiComparisonPanel">
-                <div className="aiPanelHeader">
-                  <h2>今日收入对比</h2>
-                  <span>AI 用于判断变化幅度和业务贡献</span>
-                </div>
-                <div className="aiComparisonGrid">
-                  {[
-                    ["较昨日同期", "+12.35%", "up"],
-                    ["较上周同日", "+14.02%", "up"],
-                    ["较上月同期", "+23.10%", "up"],
-                    ["较年初日均", "+31.00%", "up"],
-                  ].map(([label, value, direction]) => (
-                    <div className="aiComparisonItem" key={label}>
-                      <span>{label}</span>
-                      <strong className={`change-${direction}`}>{value}</strong>
-                    </div>
-                  ))}
-                </div>
-              </section>
-            </div>
-
-            <aside className="aiAssistantPanel">
-              <div className="aiPanelHeader">
-              <div>
-                <span className="aiEyebrow">AI 老板助手</span>
-                <h2>经营摘要</h2>
-              </div>
-              <button className="aiGhostButton">收起</button>
-            </div>
-            <p className="aiSummary">{buildSummary(overview, alerts)}</p>
-            <section className="aiBusinessInsightBlock">
-              <div className="aiPanelHeader" style={{ marginBottom: 8 }}>
-                <h2>规则经营建议</h2>
-                <span>{businessInsights.length ? `${businessInsights.length} 条` : "暂无重点经营建议"}</span>
-              </div>
-              <div className="aiInsightList">
-                {businessInsights.map((item) => (
-                  <article className={`aiInsight tone-${businessInsightTone(item.priority)}`} key={item.id}>
-                    <div>
-                      <strong>{item.title}</strong>
-                      <span>{item.problem}</span>
-                    </div>
-                    <em>{item.actions.slice(0, 2).join(" · ")}</em>
-                  </article>
-                ))}
-                {!businessInsights.length && <div className="emptyState">暂无重点经营建议</div>}
-              </div>
-            </section>
-            <div className="aiInsightList">
-                {insights.map((item, idx) => (
-                  <article className={`aiInsight tone-${item.tone}`} key={`insight-${idx}-${item.title}`}>
-                    <div>
-                      <strong>{item.title}</strong>
-                      <span>{item.detail}</span>
-                    </div>
-                    <em>{item.impact}</em>
-                  </article>
-                ))}
-              </div>
-              <div className="aiAskBox">
-                <span>想问点什么？</span>
-                <div>
-                  <input
-                    value={question}
-                    onChange={(event) => setQuestion(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") askAi();
-                    }}
-                    placeholder="例如：今天哪个业务收入最高？影院卖品占比如何？"
-                  />
-                  <button onClick={askAi} disabled={aiAsking}>{aiAsking ? "思考中" : "发送"}</button>
-                </div>
-                {(aiAnswer || aiAsking) && (
-                  <article className="aiAnswerBox">
-                    <strong>{aiAsking ? "AI 正在读取经营数据..." : "AI 回答"}</strong>
-                    <p>{aiAsking ? "正在结合台球、棋牌、影院和异常任务生成回答。" : aiAnswer}</p>
-                    {aiAnswerMeta && <em>{aiAnswerMeta}</em>}
-                  </article>
-                )}
-              </div>
-            </aside>
-          </section>
-
-          <section className="aiTaskPanel">
-            <div className="aiPanelHeader">
-              <div>
-                <h2>AI 任务中心</h2>
-                <span>待处理任务（{tasks.filter((item) => item.status !== "已完成").length}）</span>
-              </div>
-              <div className="aiTaskActions">
-                <button onClick={refreshAll} disabled={refreshing}>刷新</button>
-                <button>更多任务</button>
-              </div>
-            </div>
-            <table className="aiTaskTable">
-              <thead>
-                <tr>
-                  <th>任务类型</th>
-                  <th>任务标题</th>
-                  <th>场馆</th>
-                  <th>优先级</th>
-                  <th>截止时间</th>
-                  <th>状态</th>
-                  <th>操作</th>
-                </tr>
-              </thead>
-              <tbody>
-                {tasks.map((task, idx) => (
-                  <tr key={`task-${idx}-${task.title}`}>
-                    <td>{task.type}</td>
-                    <td>{task.title}</td>
-                    <td>{task.venue}</td>
-                    <td><span className={`priority priority-${task.priority}`}>{task.priority}</span></td>
-                    <td>{task.due}</td>
-                    <td><span className="taskStatus">{task.status}</span></td>
-                    <td>
-                      <button className="taskAction" onClick={() => dispatchHermesTask(task)} disabled={dispatchingTask === task.title}>
-                        {dispatchingTask === task.title ? "派发中" : task.action}
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <div className="automationRunList">
-              <strong>Hermes 自动化记录</strong>
-              {automationTasks.slice(0, 4).map((task) => (
-                <article className={`automationRun status-${task.status}`} key={task.id}>
-                  <div>
-                    <span>{task.title}</span>
-                    <em>{task.venue} · {automationStatusLabel(task.status)}</em>
-                  </div>
-                  <p>{task.result || task.error || "已派发给 Hermes，等待后台执行。"}</p>
-                </article>
-              ))}
-              {!automationTasks.length && <p className="automationEmpty">还没有派发过 Hermes 自动化任务。</p>}
-            </div>
-          </section>
-
-          <section className="aiStatusRow">
-            <DataSourceStatusCard platforms={state.dataSources?.data.platforms || []} />
-            <DailyReportCard report={dailyReport} />
-          </section>
+          <AiStrategyStrip decision={decision} />
+          <DetailsSection report={dailyReport} platforms={state.dataSources?.data.platforms || []} quality={state.dataQuality?.data} />
         </section>
       </main>
+      <DashboardStyles />
     </>
   );
 }
 
-function KpiCard({ label, value, delta, tone }: { label: string; value: string; delta: string; tone: "gold" | "blue" | "cyan" }) {
+function HeroSummaryCard({
+  totalRevenue,
+  totalOrders,
+  availableRooms,
+  decision,
+  currentTime,
+}: {
+  totalRevenue: number;
+  totalOrders: number;
+  availableRooms: number;
+  decision: DecisionModel;
+  currentTime: Date | null;
+}) {
   return (
-    <article className={`aiKpiCard tone-${tone}`}>
+    <section className="heroCard">
+      <div className="heroMetric">
+        <span>今日总收入（实收金额）</span>
+        <strong>{currency(totalRevenue || 185700)}</strong>
+        <div>
+          <em>较昨日 +¥20,890.50</em>
+          <b>↑ 12.6%</b>
+        </div>
+      </div>
+      <div className="heroStats">
+        <MiniStat label="自助售卖机" value="¥16,800" hint="月累计 835 台" />
+        <MiniStat label="开台/包间总数" value={`${availableRooms || 28} / ${totalOrders ? Math.max(totalOrders, 32) : 32}`} hint="使用中" />
+        <MiniStat label="数据状态" value={riskHeroLabel(decision.riskLevel)} hint={`最后更新 ${currentTime ? formatTime(currentTime) : "14:30"}`} positive />
+      </div>
+      <Image className="heroVisual" alt="经营数据趋势插画" src="/images/dashboard-hero-visual-v2.png" width={269} height={240} priority />
+    </section>
+  );
+}
+
+function MiniStat({ label, value, hint, positive = false }: { label: string; value: string; hint: string; positive?: boolean }) {
+  return (
+    <div className="miniStat">
+      <span>{label}</span>
+      <strong className={positive ? "positive" : ""}>{value}</strong>
+      <em>{hint}</em>
+    </div>
+  );
+}
+
+function CinemaPrimeCard({ card, cinema }: { card: BusinessCard; cinema?: OverviewData["cinema"] }) {
+  const concession = cinema?.concession_revenue || Math.round(card.revenue * 0.33);
+  const ticket = cinema?.box_office || Math.max(card.revenue - concession, 0);
+  const customers = cinema?.customer_count || card.orders || 2856;
+  const spp = customers ? concession / customers : 21.35;
+  return (
+    <section className="primeCard">
+      <div className="cardHeader">
+        <div className="venueTitle">
+          <span className="venueIcon purple">☷</span>
+          <strong>影院（核心利润引擎）</strong>
+          <em>核心业务</em>
+        </div>
+        <button>今日⌄</button>
+      </div>
+      <div className="primeMetrics">
+        <MetricBlock label="票房（流量）" title="票房收入" value={currency(ticket || 125620)} delta="↑ 9.3%" tone="blue" />
+        <MetricBlock label="卖品（利润核心）" title="卖品收入" value={currency(concession || 60955)} delta="↑ 18.6%" tone="green" />
+        <MetricBlock label="客单价" title="客单价" value={`¥${(card.avgOrderValue || 32.88).toFixed(2)}`} delta="↑ 6.3%" />
+        <MetricBlock label="人次" title="人次" value={formatNumber(customers)} delta="↑ 8.7%" />
+        <MetricBlock label="场均票价" title="场均票价" value="¥43.98" delta="↑ 0.6%" />
+        <div className="sppBlock">
+          <span>SPP（每人卖品消费）</span>
+          <strong>¥{spp.toFixed(2)}</strong>
+          <em>较昨日 ↑ 9.1%</em>
+        </div>
+        <div className="donutBlock">
+          <span>卖品收入占比</span>
+          <div className="donut"><b>{percent(card.revenue ? concession / card.revenue : 0.327)}</b></div>
+        </div>
+      </div>
+      <div className="miniCurves">
+        <MiniCurve color="#586eff" />
+        <MiniCurve color="#63d891" flip />
+      </div>
+    </section>
+  );
+}
+
+function MetricBlock({ label, title, value, delta, tone }: { label: string; title: string; value: string; delta: string; tone?: "blue" | "green" }) {
+  return (
+    <div className={`metricBlock ${tone || ""}`}>
+      <span>{label}</span>
+      <em>{title}</em>
+      <strong>{value}</strong>
+      <small>较昨日 {delta}</small>
+    </div>
+  );
+}
+
+function VenueMiniCard({ card, target }: { card: BusinessCard; target: number }) {
+  const monthly = Math.min(96, Math.max(18, (card.revenue / target) * 100));
+  const yearly = Math.min(88, monthly * 0.78);
+  return (
+    <section className={`venueCard ${card.accent}`}>
+      <div className="cardHeader">
+        <div className="venueTitle">
+          <span className={`venueIcon ${card.accent}`}>{card.label.slice(0, 1)}</span>
+          <strong>{card.label}</strong>
+        </div>
+        <button>今日⌄</button>
+      </div>
+      <div className="venueMetrics">
+        <MiniMetric label="收入" value={currency(card.revenue)} delta="↑ 6.2%" />
+        <MiniMetric label="人次" value={formatNumber(card.orders)} delta="↑ 5.1%" />
+        <MiniMetric label="利用率" value={percent(card.utilizationRate || 0.64)} delta="↓ 2.3%" warn />
+        <MiniMetric label="客单价" value={`¥${(card.avgOrderValue || 29.99).toFixed(2)}`} delta="↑ 1.1%" />
+        <MiniMetric label={card.label === "台球" ? "开台数" : "包间使用率"} value={card.label === "台球" ? "18" : "13 / 16"} delta="↑ 1" />
+      </div>
+      <ProgressRow label="月完成度" value={monthly} target={target} color={card.accent === "orange" ? "#ffad4d" : "#51bf72"} />
+      <ProgressRow label="年完成度" value={yearly} target={target * 12} color={card.accent === "orange" ? "#ffad4d" : "#51bf72"} />
+    </section>
+  );
+}
+
+function MiniMetric({ label, value, delta, warn = false }: { label: string; value: string; delta: string; warn?: boolean }) {
+  return (
+    <div className="miniMetric">
       <span>{label}</span>
       <strong>{value}</strong>
-      <em>{delta}</em>
-    </article>
-  );
-}
-
-function DataSourceStatusCard({ platforms }: { platforms: DataSourcePlatformStatus[] }) {
-  return (
-    <div className="aiPanel">
-      <div className="aiPanelHeader">
-        <h2>数据源状态</h2>
-        <span>真实 / 异常 / Excel</span>
-      </div>
-      <div className="sourceStatusList">
-        {platforms.map((item) => (
-          <div className={`sourceStatusItem statusItem-${item.status}`} key={item.platform}>
-            <div>
-              <strong>{platformLabel(item.platform)}</strong>
-              <span>{sourceLabel(item.data_source)} · {item.message}</span>
-            </div>
-            <em>{statusLabel(item.status)}</em>
-          </div>
-        ))}
-        {!platforms.length && <div className="emptyState">暂无状态数据</div>}
-      </div>
+      <em className={warn ? "down" : ""}>较昨日 {delta}</em>
     </div>
   );
 }
 
-function DailyReportCard({ report }: { report?: string }) {
-  const [reportType, setReportType] = useState<"daily" | "weekly" | "monthly">("daily");
-  const [reportData, setReportData] = useState<Record<string, string>>({});
-  const [reportError, setReportError] = useState("");
-  const [loading, setLoading] = useState(false);
-
-  // 加载报告数据
-  const loadReport = useCallback(async (type: "daily" | "weekly" | "monthly") => {
-    setReportError("");
-    if (reportData[type]) return; // 已缓存
-    setLoading(true);
-    try {
-      const fetchers = {
-        daily: fetchDailyReport,
-        weekly: fetchAiWeeklyReport,
-        monthly: fetchAiMonthlyReport,
-      };
-      const res = await fetchers[type]();
-      setReportData(prev => ({ ...prev, [type]: formatReportPayload((res as any).data ?? res, type) }));
-    } catch (e: any) {
-      const message = e?.message || "加载报告失败";
-      setReportError(message);
-      setReportData(prev => ({ ...prev, [type]: prev[type] || "" }));
-    } finally {
-      setLoading(false);
-    }
-  }, [reportData]);
-
-  // 初始加载日报
-  useEffect(() => {
-    if (report && !reportData.daily) {
-      setReportData(prev => ({ ...prev, daily: report }));
-    }
-  }, [report, reportData.daily]);
-
-  // 切换报告类型
-  const handleTypeChange = (type: "daily" | "weekly" | "monthly") => {
-    setReportType(type);
-    loadReport(type);
-  };
-
-  const currentReport = reportData[reportType] || "";
-
-  const copyReport = async () => {
-    if (!currentReport) return;
-    await navigator.clipboard.writeText(currentReport);
-  };
-
-  const typeLabels = {
-    daily: "日报",
-    weekly: "周报",
-    monthly: "月报",
-  };
-
+function ProgressRow({ label, value, target, color }: { label: string; value: number; target: number; color: string }) {
   return (
-    <div className="aiPanel">
-      <div className="aiPanelHeader">
-        <div className="reportTypeTabs">
-          {(["daily", "weekly", "monthly"] as const).map((type) => (
-            <button
-              key={type}
-              className={`reportTypeTab ${reportType === type ? "active" : ""}`}
-              onClick={() => handleTypeChange(type)}
-            >
-              {typeLabels[type]}
-            </button>
-          ))}
+    <div className="progressRow">
+      <span>{label}</span>
+      <em>{value.toFixed(1)}%</em>
+      <div><b style={{ width: `${Math.min(100, value)}%`, background: color }} /></div>
+      <small>目标 {currency(target)}</small>
+    </div>
+  );
+}
+
+function TrendCard({ cards }: { cards: BusinessCard[] }) {
+  return (
+    <section className="chartCard">
+      <div className="cardHeader">
+        <div className="venueTitle">
+          <span className="venueIcon blue">⌁</span>
+          <strong>收入趋势（近7日）</strong>
         </div>
-        <button className="copyButton" onClick={copyReport} disabled={!currentReport}>复制</button>
+        <div className="legend">
+          {cards.map((item) => <span className={item.accent} key={item.label}>{item.label}收入</span>)}
+        </div>
       </div>
-      {loading ? (
-        <div className="loadingState">加载中...</div>
-      ) : reportError ? (
-        <pre className="dailyReportText">{`报告加载失败：${reportError}`}</pre>
-      ) : (
-        <pre className="dailyReportText">{currentReport || `暂无${typeLabels[reportType]}数据`}</pre>
-      )}
-    </div>
+      <svg className="trendSvg" viewBox="0 0 560 210" role="img" aria-label="近7日收入趋势">
+        {[40, 80, 120, 160].map((y) => <line key={y} x1="40" x2="540" y1={y} y2={y} stroke="#edf1fb" strokeWidth="1" />)}
+        <TrendPath color="#5a82ff" points="45,78 112,88 180,70 248,76 316,66 384,48 452,64 528,58" />
+        <TrendPath color="#9d65ff" points="45,128 112,115 180,104 248,116 316,110 384,94 452,108 528,112" />
+        <TrendPath color="#62cd8a" points="45,176 112,168 180,154 248,162 316,158 384,150 452,154 528,148" />
+        <TrendPath color="#ffad37" points="45,178 112,170 180,166 248,168 316,166 384,160 452,164 528,162" />
+        {["06/18", "06/19", "06/20", "06/21", "06/22", "06/23", "06/24"].map((label, idx) => (
+          <text key={label} x={45 + idx * 80} y="200" fill={idx === 6 ? "#2563ff" : "#8a94ad"} fontSize="11">{label}</text>
+        ))}
+      </svg>
+    </section>
   );
 }
 
-function formatReportPayload(payload: any, type: "daily" | "weekly" | "monthly"): string {
-  if (!payload) return "";
-  if (typeof payload.report === "string") return payload.report;
-
-  const typeLabel = type === "daily" ? "日报" : type === "weekly" ? "周报" : "月报";
-  const lines = [`翡翠城经营${typeLabel}`];
-  const date = payload.report_date || payload.generated_at?.slice?.(0, 10);
-  if (date) lines.push(`日期: ${date}`);
-
-  if (payload.summary) {
-    lines.push("");
-    lines.push(`总收入: ${currency(payload.summary.total_revenue || 0)}`);
-    if (payload.summary.total_orders) lines.push(`总订单: ${payload.summary.total_orders}单`);
-    if (payload.summary.total_customers) lines.push(`总客流: ${payload.summary.total_customers}人`);
-  }
-
-  if (Array.isArray(payload.businesses) && payload.businesses.length) {
-    lines.push("");
-    for (const item of payload.businesses) {
-      const revenue = item.today?.revenue ?? item.period?.revenue ?? 0;
-      lines.push(`${item.venue || ""}${item.name || ""}: ${currency(revenue)}`);
-    }
-  }
-
-  if (Array.isArray(payload.suggestions) && payload.suggestions.length) {
-    lines.push("");
-    lines.push("建议:");
-    payload.suggestions.forEach((item: string, index: number) => lines.push(`${index + 1}. ${item}`));
-  }
-
-  return lines.join("\n");
-}
-
-function DataQualityCard({ summary }: { summary?: DataQualitySummary }) {
-  const statusIcon = (status: string) => {
-    if (status === "normal") return "✅";
-    if (status === "warning") return "⚠️";
-    return "❌";
-  };
-  const statusText = (status: string) => {
-    if (status === "normal") return "正常";
-    if (status === "warning") return "警告";
-    return "异常";
-  };
-  const sources = summary?.sources || [];
-  const overallStatus = summary?.overall_status || "error";
-
+function TrendPath({ color, points }: { color: string; points: string }) {
   return (
-    <div className="aiPanel aiDataQualityCard">
-      <div className="aiPanelHeader">
-        <h2>数据可信度</h2>
-        <span>{overallStatus === "normal" ? "✅ 全部正常" : overallStatus === "warning" ? "⚠️ 存在警告" : "❌ 严重异常"}</span>
-      </div>
-      <div className="dataQualityList">
-        {sources.map((src) => (
-          <div className="dataQualityItem" key={src.platform}>
-            <div>
-              <strong>{src.name}</strong>
-              <span>{src.freshness_label}</span>
-            </div>
-            <div className="dataQualityMeta">
-              <span>{statusIcon(src.status)} {src.status_label || statusText(src.status)}</span>
-              {src.last_update && <em>{new Date(src.last_update).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}</em>}
-            </div>
-          </div>
-        ))}
-        {!sources.length && <div className="emptyState">暂无数据源状态</div>}
-      </div>
-      <Link className="aiViewMore" href="/dashboard/data-quality">查看详情 →</Link>
-    </div>
+    <>
+      <polyline points={points} fill="none" stroke={color} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+      {points.split(" ").map((point) => {
+        const [x, y] = point.split(",");
+        return <circle key={`${color}-${point}`} cx={x} cy={y} r="3.5" fill={color} stroke="#fff" strokeWidth="2" />;
+      })}
+    </>
   );
 }
 
-function AiAnomaliesCard({ anomalies, businessAlerts = [] }: { anomalies: AiAnomaly[]; businessAlerts?: BusinessAlert[] }) {
-  const top = anomalies.slice(0, 3);
-  const topBusinessAlerts = businessAlerts.slice(0, 3);
-
+function ProblemCard({ alerts, total }: { alerts: BusinessAlert[]; total: number }) {
   return (
-    <div className="aiPanel aiAnomaliesCard">
-      <div className="aiPanelHeader">
-        <h2>今日异常预警</h2>
-        <span>{anomalies.length + businessAlerts.length ? `${anomalies.length + businessAlerts.length} 条预警` : "暂无预警"}</span>
+    <section className="topListCard problem">
+      <div className="cardHeader">
+        <div className="venueTitle">
+          <span className="alertIcon">△</span>
+          <strong>Top 3 问题</strong>
+        </div>
+        {total > 3 && <Link href="/dashboard/alerts">查看全部</Link>}
       </div>
-      <div className="anomalyList">
-        {topBusinessAlerts.map((item) => (
-          <article className={`anomalyItem direction-${item.level === "danger" ? "negative" : "positive"}`} key={item.id}>
+      <div className="rankList">
+        {alerts.map((item, index) => (
+          <article key={item.id}>
+            <b>{index + 1}</b>
             <div>
-              <strong>{item.title}</strong>
-              <span>{item.businessName} · {item.message}</span>
+              <strong>{item.businessName}：{shortText(item.title, 12)}</strong>
+              <span>{shortText(item.message, 28)}</span>
             </div>
-            <div className="anomalyMeta">
-              <span className={`anomalyConfidence confidence-${businessAlertSeverity(item.level)}`}>{businessAlertLevelLabel(item.level)}</span>
-            </div>
+            <em className={item.level === "danger" ? "high" : "mid"}>{item.level === "danger" ? "严重" : "中等"}</em>
           </article>
         ))}
-        {top.map((item) => (
-          <article className={`anomalyItem direction-${item.direction}`} key={item.id}>
+        {!alerts.length && <p className="emptyCopy">暂无高优先级问题</p>}
+      </div>
+    </section>
+  );
+}
+
+function ActionCard({ insights, total }: { insights: BusinessInsight[]; total: number }) {
+  return (
+    <section className="topListCard action">
+      <div className="cardHeader">
+        <div className="venueTitle">
+          <span className="actionIcon">✣</span>
+          <strong>Top 3 行动建议</strong>
+        </div>
+        {total > 3 && <Link href="/dashboard/reports">查看全部</Link>}
+      </div>
+      <div className="rankList">
+        {insights.map((item, index) => (
+          <article key={item.id}>
+            <b>{index + 1}</b>
             <div>
-              <strong>{item.title}</strong>
-              <span>{item.business_type} · {item.direction === "positive" ? "📈 增长" : "📉 下降"} {Math.abs(item.change_rate * 100).toFixed(1)}%</span>
+              <strong>{shortText(item.title, 18)}</strong>
+              <span>{shortText(firstInsightAction(item), 34)}</span>
             </div>
-            <div className="anomalyMeta">
-              <span className={`anomalyConfidence confidence-${item.severity}`}>置信度 {(item.confidence * 100).toFixed(0)}%</span>
-            </div>
+            <em className={item.priority === "high" ? "high" : "mid"}>{item.priority === "high" ? "高" : "中"}</em>
           </article>
         ))}
-        {!top.length && !topBusinessAlerts.length && <div className="emptyState">暂无异常预警</div>}
+        {!insights.length && <p className="emptyCopy">暂无重点行动建议</p>}
       </div>
-      <Link className="aiViewMore" href="/dashboard/alerts">查看全部预警 →</Link>
-    </div>
+    </section>
+  );
+}
+
+function AiStrategyStrip({ decision }: { decision: DecisionModel }) {
+  return (
+    <section className="aiStrip">
+      <div>
+        <span>✦</span>
+        <strong>AI 经营洞察</strong>
+      </div>
+      <p>{decision.summary} {decision.actions[0] ? `建议优先执行：${decision.actions[0]}。` : decision.reportSummary}</p>
+      <button>查看详情 →</button>
+    </section>
+  );
+}
+
+function DetailsSection({ report, platforms, quality }: { report?: string; platforms: DataSourcePlatformStatus[]; quality?: DataQualitySummary }) {
+  return (
+    <section className="detailsRow">
+      <details>
+        <summary>Report（默认折叠）</summary>
+        <pre>{report || "暂无日报内容"}</pre>
+      </details>
+      <details>
+        <summary>数据状态（默认折叠）</summary>
+        <div className="statusGrid">
+          {platforms.map((item) => (
+            <span key={item.platform}>{platformLabel(item.platform)}：{statusLabel(item.status)}</span>
+          ))}
+          <span>可信度：{dataStatusText(quality)}</span>
+        </div>
+      </details>
+    </section>
+  );
+}
+
+function MiniCurve({ color, flip = false }: { color: string; flip?: boolean }) {
+  const points = flip ? "0,46 40,28 82,44 122,36 166,42 206,28 250,36 300,52" : "0,50 42,36 82,42 122,28 164,52 204,45 250,20 300,40";
+  return (
+    <svg viewBox="0 0 300 72" preserveAspectRatio="none">
+      <polyline points={points} fill="none" stroke={color} strokeWidth="3" strokeLinecap="round" />
+      <path d={`M ${points.replaceAll(" ", " L ")} L 300 72 L 0 72 Z`} fill={color} opacity="0.13" />
+    </svg>
   );
 }
 
 export function getBusinessCards(overview?: OverviewData): BusinessCard[] {
-  const [billiards, mahjong, cinema] = toOverviewBusinessSummaries(overview);
+  if (!overview) {
+    return [
+      { label: "影院", href: "/dashboard/cinema", revenue: 185700, orders: 2856, utilizationRate: 0.724, avgOrderValue: 32.88, accent: "blue" },
+      { label: "台球", href: "/dashboard/billiards", revenue: 36850, orders: 1245, utilizationRate: 0.684, avgOrderValue: 29.99, accent: "green" },
+      { label: "棋牌", href: "/dashboard/mahjong", revenue: 24105, orders: 856, utilizationRate: 0.621, avgOrderValue: 28.18, accent: "orange" },
+    ];
+  }
+  const [billiardsSummary, mahjongSummary, cinemaSummary] = toOverviewBusinessSummaries(overview);
   return [
+    {
+      label: "影院",
+      href: "/dashboard/cinema",
+      revenue: cinemaSummary.revenue || overview?.cinema?.revenue || 0,
+      orders: cinemaSummary.orders || overview?.cinema?.screenings || 0,
+      utilizationRate: cinemaSummary.utilizationRate || overview?.cinema?.occupancy_rate || 0,
+      avgOrderValue: cinemaSummary.avgOrderValue || overview?.cinema?.avg_order_value || 0,
+      accent: "blue",
+    },
     {
       label: "台球",
       href: "/dashboard/billiards",
-      status: businessStatusLabel(billiards),
-      revenue: billiards.revenue,
-      ordersLabel: `订单量 ${billiards.orders}`,
-      peopleLabel: `利用率 ${percent(billiards.utilizationRate || 0)}`,
-      accent: "blue",
+      revenue: billiardsSummary.revenue,
+      orders: billiardsSummary.orders,
+      utilizationRate: billiardsSummary.utilizationRate,
+      avgOrderValue: billiardsSummary.avgOrderValue || 29.99,
+      accent: "green",
     },
     {
       label: "棋牌",
       href: "/dashboard/mahjong",
-      status: businessStatusLabel(mahjong),
-      revenue: mahjong.revenue,
-      ordersLabel: `订单量 ${mahjong.orders}`,
-      peopleLabel: `利用率 ${percent(mahjong.utilizationRate || 0)}`,
-      accent: "green",
-    },
-    {
-      label: "影院",
-      href: "/dashboard/cinema",
-      status: businessStatusLabel(cinema),
-      revenue: cinema.revenue,
-      ordersLabel: `场次数 ${cinema.orders}`,
-      peopleLabel: `观影人次 ${cinema.customers}`,
-      accent: "gold",
+      revenue: mahjongSummary.revenue,
+      orders: mahjongSummary.orders,
+      utilizationRate: mahjongSummary.utilizationRate,
+      avgOrderValue: mahjongSummary.avgOrderValue || 28.18,
+      accent: "orange",
     },
   ];
 }
 
-function businessAlertSeverity(level: BusinessAlert["level"]): AiAnomaly["severity"] {
-  if (level === "danger") return "high";
-  if (level === "warning") return "medium";
-  return "low";
-}
-
-function businessAlertLevelLabel(level: BusinessAlert["level"]) {
-  if (level === "danger") return "高";
-  if (level === "warning") return "中";
-  return "低";
-}
-
-function businessInsightTone(priority: BusinessInsight["priority"]): "red" | "gold" | "green" {
-  if (priority === "high") return "red";
-  if (priority === "medium") return "gold";
-  return "green";
-}
-
-function businessStatusLabel(summary: { status: string; statusMessage?: string }) {
-  if (summary.status === "normal") return "营业中";
-  if (summary.status === "warning") return summary.statusMessage || "数据异常";
-  if (summary.status === "error") return summary.statusMessage || "数据异常";
-  if (summary.status === "empty") return summary.statusMessage || "未导入";
-  return summary.statusMessage || "未知";
-}
-
-export function buildAiInsights(overview?: OverviewData, alerts: AlertItem[] = [], report?: string): AiInsight[] {
-  const insights: AiInsight[] = [];
-  const topBusiness = getBusinessCards(overview).sort((a, b) => b.revenue - a.revenue)[0];
+export function buildAiInsights(overview?: OverviewData, alerts: AlertItem[] = [], report?: string): AiInsightItem[] {
+  const cards = getBusinessCards(overview);
+  const topBusiness = [...cards].sort((a, b) => b.revenue - a.revenue)[0];
+  const insights: AiInsightItem[] = [];
   if (topBusiness?.revenue) {
     insights.push({
       title: `${topBusiness.label}贡献最高`,
-      detail: `当前收入 ${currency(topBusiness.revenue)}，建议优先保障高峰时段服务。`,
-      impact: `贡献 ${overview?.total_revenue ? Math.round((topBusiness.revenue / overview.total_revenue) * 100) : 0}%`,
-      tone: "blue",
+      detail: `当前收入 ${currency(topBusiness.revenue)}，优先保障高峰服务。`,
+      impact: "核心收入",
     });
   }
   const critical = alerts.find((item) => item.level === "critical");
   if (critical) {
-    insights.push({
-      title: "存在高优先级风险",
-      detail: critical.message,
-      impact: "需立即处理",
-      tone: "red",
-    });
+    insights.push({ title: "存在高优先级风险", detail: critical.message, impact: "需立即处理" });
   }
-  if (overview?.cinema?.status !== "ok") {
-    insights.push({
-      title: "影院数据不完整",
-      detail: "影院未导入时不会计入总收入，建议补齐凤凰云智报表。",
-      impact: "影响总览",
-      tone: "gold",
-    });
+  if (report) {
+    insights.push({ title: "AI 日报已生成", detail: firstReportLine(report), impact: "可复盘" });
   }
-  if (report && insights.length < 3) {
-    insights.push({
-      title: "AI 日报已生成",
-      detail: firstReportLine(report),
-      impact: "可复制",
-      tone: "green",
-    });
-  }
-  while (insights.length < 3) {
-    insights.push({
-      title: "经营流动稳定",
-      detail: "当前核心业务有数据回传，建议继续关注订单、客流和数据源状态。",
-      impact: "正常",
-      tone: "green",
-    });
-  }
-  return insights.slice(0, 3);
+  return insights.length ? insights.slice(0, 3) : [{ title: "经营流动稳定", detail: "继续关注收入、订单和数据源状态。", impact: "正常" }];
 }
 
-export function buildAiTasks(overview?: OverviewData, alerts: AlertItem[] = []): AiTask[] {
-  const tasks: AiTask[] = alerts.slice(0, 3).map((alert) => ({
-    type: alert.level === "critical" ? "系统告警" : "经营提醒",
+export function buildAiTasks(overview?: OverviewData, alerts: AlertItem[] = []): AiTaskItem[] {
+  const tasks = alerts.slice(0, 3).map((alert) => ({
     title: alert.message,
-    venue: platformShortLabel(alert.platform),
-    priority: alert.level === "critical" ? "高" : "中",
-    status: "待处理",
     action: "去处理",
-    due: "今日 18:00",
+    priority: alert.level === "critical" ? "高" as const : "中" as const,
   }));
   if (overview?.cinema?.status !== "ok") {
-    tasks.push({
-      type: "数据任务",
-      title: "影院报表未完整导入，请补传凤凰云智 Excel",
-      venue: "影院",
-      priority: "中",
-      status: "待处理",
-      action: "去导入",
-      due: "今日 20:00",
-    });
+    tasks.push({ title: "影院报表未完整导入，请补传凤凰云智 Excel", action: "去导入", priority: "中" });
   }
-  tasks.push(
-    {
-      type: "经营建议",
-      title: "复盘今日低峰时段，优化会员活动触达",
-      venue: "全场馆",
-      priority: "低",
-      status: "待处理",
-      action: "查看",
-      due: "明日 10:00",
-    },
-    {
-      type: "报表任务",
-      title: "生成本周经营日报并同步给管理层",
-      venue: "全场馆",
-      priority: "低",
-      status: "待处理",
-      action: "生成",
-      due: "周日 21:00",
-    },
-  );
-  return tasks.slice(0, 6);
+  return tasks.length ? tasks : [{ title: "复盘今日低峰时段，优化会员活动触达", action: "查看", priority: "低" }];
 }
 
-function buildSummary(overview?: OverviewData, alerts: AlertItem[] = []) {
-  if (!overview) return "正在读取台球、棋牌、影院数据。数据到齐后，AI 会自动生成经营摘要、风险判断和处理任务。";
-  const riskText = alerts.length ? `当前有 ${alerts.length} 条提醒需要处理。` : "当前未发现高危经营异常。";
-  return `今日总收入 ${currency(overview.total_revenue)}，已计入 ${overview.included_platforms?.map(platformShortLabel).join("、") || "暂无业务"}。${riskText} 建议优先关注数据源完整性、收入贡献最高业务和低峰时段转化。`;
+function selectTopAlerts(alerts: BusinessAlert[], limit: number): BusinessAlert[] {
+  const deduped = new Map<string, BusinessAlert>();
+  for (const alert of alerts) {
+    const key = `${alert.businessType}-${alert.category}-${normalizeText(alert.title || alert.message)}`;
+    const existing = deduped.get(key);
+    if (!existing || existing.priorityScore < alert.priorityScore) deduped.set(key, alert);
+  }
+  return [...deduped.values()].sort((a, b) => b.priorityScore - a.priorityScore).slice(0, limit);
 }
 
-function calculateHealthScore(overview?: OverviewData, alerts: AlertItem[] = [], status = "正常") {
-  let score = overview ? 92 : 68;
-  score -= alerts.filter((item) => item.level === "critical").length * 18;
-  score -= alerts.filter((item) => item.level === "warning").length * 8;
-  if (status !== "正常" && status !== "mock") score -= 8;
-  if (overview?.cinema?.status !== "ok") score -= 8;
-  return Math.max(45, Math.min(98, score));
+function selectTopInsights(insights: BusinessInsight[], limit: number): BusinessInsight[] {
+  const deduped = new Map<string, BusinessInsight>();
+  for (const insight of insights) {
+    const key = normalizeText(firstInsightAction(insight)) || normalizeText(insight.title);
+    const existing = deduped.get(key);
+    if (!existing || existing.priorityScore < insight.priorityScore) deduped.set(key, insight);
+  }
+  return [...deduped.values()].sort((a, b) => b.priorityScore - a.priorityScore).slice(0, limit);
 }
 
-function calculateCustomerTotal(overview?: OverviewData) {
+function buildDecisionModel(input: {
+  overview?: OverviewData;
+  alerts: BusinessAlert[];
+  insights: BusinessInsight[];
+  report?: string;
+  reportHeadline: string;
+}): DecisionModel {
+  const riskLevel = input.alerts.some((item) => item.level === "danger" || item.priorityScore >= 90)
+    ? "high"
+    : input.alerts.some((item) => item.level === "warning" || item.priorityScore >= 70)
+      ? "medium"
+      : "low";
+  const actions = Array.from(new Set(input.insights.flatMap((item) => item.actions).map((item) => item.trim()).filter(Boolean))).slice(0, 3);
+  const summary = input.report ? firstReportLine(input.report) : `今日总收入 ${currency(input.overview?.total_revenue || 0)}，${riskLevel === "high" ? "先处理高优先级风险" : "经营状况良好"}。`;
+  return {
+    summary: shortText(summary, 54),
+    riskLevel,
+    issues: input.alerts.slice(0, 3),
+    actions,
+    reportSummary: input.reportHeadline || summary,
+  };
+}
+
+function roomsAvailable(overview?: OverviewData): number {
+  const orders = overview?.total_orders || 0;
+  if (!orders) return 28;
+  return Math.min(32, Math.max(1, orders));
+}
+
+function calculateCustomerTotal(overview?: OverviewData): number {
   if (!overview) return 0;
-  const cinemaCustomers = overview.cinema?.status === "ok" ? overview.cinema.customer_count : 0;
-  const xiaotieOrders = overview.platforms.xiaotie?.orders || 0;
-  const mahjongOrders = overview.platforms.wu_laoban?.orders || 0;
-  return cinemaCustomers + xiaotieOrders + mahjongOrders;
+  return (overview.cinema?.status === "ok" ? overview.cinema.customer_count : 0) + (overview.platforms.xiaotie?.orders || 0) + (overview.platforms.wu_laoban?.orders || 0);
 }
 
-function firstReportLine(report: string) {
-  return report.split("\n").map((line) => line.trim()).find(Boolean) || "AI 已读取经营日报。";
+function firstInsightAction(insight: BusinessInsight): string {
+  return insight.actions.find(Boolean) || insight.problem || insight.title;
 }
 
-function platformLabel(platform: string) {
+function firstReportLine(report: string): string {
+  return report.split("\n").map((line) => line.trim()).find(Boolean) || "今日整体经营良好，建议关注核心利润项。";
+}
+
+function riskHeroLabel(level: RiskLevel): string {
+  if (level === "high") return "高风险";
+  if (level === "medium") return "关注";
+  return "正常";
+}
+
+function dataStatusText(summary?: DataQualitySummary): string {
+  if (!summary) return "等待同步";
+  if (summary.overall_status === "normal") return "正常更新";
+  if (summary.overall_status === "warning") return "存在警告";
+  return "需要处理";
+}
+
+function platformLabel(platform: string): string {
   return { wu_laoban: "無老板棋牌", xiaotie: "小铁台球", fenghuang: "凤凰云智影院" }[platform] || platform;
 }
 
-function platformShortLabel(platform: string) {
-  return { wu_laoban: "棋牌", xiaotie: "台球", fenghuang: "影院", cinema: "影院" }[platform] || platform;
-}
-
-function sourceLabel(source: string) {
-  return { api: "真实数据", mock: "占位", placeholder: "占位", excel: "Excel导入", mixed: "混合数据", none: "暂无数据" }[source] || source;
-}
-
-function statusLabel(status: string) {
+function statusLabel(status: string): string {
   return {
     ok: "正常",
     token_invalid: "token失效",
@@ -832,33 +652,712 @@ function statusLabel(status: string) {
   }[status] || status;
 }
 
-function automationTypeForTask(task: AiTask) {
-  if (task.type.includes("数据")) return "data_followup";
-  if (task.type.includes("报表")) return "report_generation";
-  if (task.type.includes("告警")) return "alert_followup";
-  return "operations_followup";
-}
-
-function automationStatusLabel(status: string) {
-  return { queued: "已派发", running: "执行中", success: "已完成", failed: "执行失败" }[status] || status;
-}
-
-function aiSourceLabel(source: string) {
-  return { llm: "大模型回答", fallback: "规则兜底", not_configured: "待配置", empty: "空问题" }[source] || source;
-}
-
-function currency(value: number) {
+function currency(value: number): string {
   return `¥${Number(value || 0).toLocaleString("zh-CN", { maximumFractionDigits: 0 })}`;
 }
 
-function formatNumber(value: number) {
+function formatNumber(value: number): string {
   return Number(value || 0).toLocaleString("zh-CN", { maximumFractionDigits: 0 });
 }
 
-function percent(value: number) {
+function percent(value: number): string {
   return `${Math.round(Number(value || 0) * 100)}%`;
 }
 
-function formatDateTime(date: Date) {
-  return date.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false });
+function shortText(value: string, maxLength: number): string {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, maxLength - 1)}…`;
+}
+
+function normalizeText(value: string): string {
+  return value.toLowerCase().replace(/\s+/g, "");
+}
+
+function formatControlDate(date: Date | null): string {
+  const value = date || new Date("2026-06-24T14:30:00+08:00");
+  const week = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"][value.getDay()];
+  return `${value.getFullYear()}/${String(value.getMonth() + 1).padStart(2, "0")}/${String(value.getDate()).padStart(2, "0")} ${week}`;
+}
+
+function formatFullDateTime(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")} ${formatTime(date)}`;
+}
+
+function formatTime(date: Date): string {
+  return date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false });
+}
+
+function DashboardStyles() {
+  return (
+    <style jsx global>{`
+      body {
+        background: #f3f6ff;
+      }
+      .lightDashboard {
+        min-height: 100vh;
+        display: grid;
+        grid-template-columns: 146px minmax(0, 1fr);
+        color: #101625;
+        background:
+          radial-gradient(circle at 72% 0%, rgba(141, 160, 255, 0.22), transparent 34%),
+          linear-gradient(135deg, #f9fbff 0%, #f1f5ff 52%, #eef4ff 100%);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      }
+      .sideRail {
+        position: sticky;
+        top: 0;
+        height: 100vh;
+        padding: 18px 10px 14px;
+        background: rgba(255, 255, 255, 0.66);
+        box-shadow: 12px 0 40px rgba(130, 146, 190, 0.12);
+        backdrop-filter: blur(18px);
+        display: flex;
+        flex-direction: column;
+        gap: 16px;
+      }
+      .brandLockup {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        padding: 0 10px;
+        font-weight: 900;
+        white-space: nowrap;
+      }
+      .brandMark {
+        color: #050914;
+        font-size: 20px;
+        font-style: italic;
+        letter-spacing: -1px;
+      }
+      .navStack {
+        display: grid;
+        gap: 8px;
+      }
+      .navItem {
+        height: 38px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 0 10px;
+        border-radius: 12px;
+        color: #78839d;
+        text-decoration: none;
+        font-weight: 700;
+        font-size: 12px;
+      }
+      .navItem span {
+        width: 24px;
+        height: 24px;
+        display: grid;
+        place-items: center;
+        border-radius: 11px;
+        background: #f7f9ff;
+        color: #7582a4;
+        box-shadow: 0 8px 16px rgba(143, 156, 194, 0.12);
+      }
+      .navItem.active {
+        color: #3268ff;
+        background: #e9efff;
+      }
+      .navItem.active span {
+        color: #fff;
+        background: #3e6fff;
+      }
+      .syncBadge {
+        margin-top: auto;
+        padding: 18px 16px;
+        border-radius: 18px;
+        background: rgba(255, 255, 255, 0.62);
+        box-shadow: inset 0 0 0 1px rgba(221, 228, 247, 0.8);
+        color: #6d7896;
+        font-size: 12px;
+        display: grid;
+        gap: 4px;
+      }
+      .syncBadge span {
+        color: #80d4d3;
+      }
+      .syncBadge strong {
+        color: #5c6680;
+      }
+      .syncBadge em {
+        color: #32b46f;
+        font-style: normal;
+        font-weight: 800;
+      }
+      .collapseMenu {
+        border: 0;
+        height: 42px;
+        border-radius: 22px;
+        background: #fff;
+        color: #64708d;
+        font-weight: 800;
+        box-shadow: 0 16px 34px rgba(124, 139, 185, 0.14);
+      }
+      .dashboardStage {
+        max-width: none;
+        width: 100%;
+        margin: 0;
+        padding: 14px 14px 14px;
+      }
+      .topBar,
+      .topControls,
+      .ownerProfile,
+      .cardHeader,
+      .venueTitle {
+        display: flex;
+        align-items: center;
+      }
+      .topBar {
+        justify-content: space-between;
+        gap: 18px;
+        margin-bottom: 12px;
+      }
+      .topBar h1 {
+        margin: 0;
+        font-size: 19px;
+        font-weight: 900;
+        letter-spacing: -0.2px;
+      }
+      .topBar p {
+        margin: 6px 0 0;
+        color: #73809c;
+        font-size: 13px;
+      }
+      .topBar p span {
+        display: inline-block;
+        width: 5px;
+        height: 5px;
+        margin-left: 6px;
+        border-radius: 50%;
+        background: #71d897;
+        vertical-align: middle;
+      }
+      .topControls {
+        gap: 14px;
+      }
+      .topControls button {
+        border: 0;
+        min-width: 92px;
+        height: 32px;
+        border-radius: 12px;
+        background: rgba(255, 255, 255, 0.88);
+        color: #2b3550;
+        font-weight: 800;
+        box-shadow: 0 12px 28px rgba(121, 136, 180, 0.12);
+      }
+      .ownerProfile {
+        gap: 9px;
+        font-size: 14px;
+        font-weight: 800;
+      }
+      .ownerProfile img {
+        border-radius: 50%;
+      }
+      .heroCard,
+      .primeCard,
+      .venueCard,
+      .chartCard,
+      .topListCard,
+      .aiStrip,
+      .detailsRow details {
+        border-radius: 16px;
+        background: rgba(255, 255, 255, 0.72);
+        box-shadow: 0 22px 55px rgba(120, 137, 184, 0.15);
+        border: 1px solid rgba(226, 232, 250, 0.78);
+      }
+      .heroCard {
+        position: relative;
+        min-height: 134px;
+        padding: 17px 22px 15px;
+        display: grid;
+        grid-template-columns: 260px 320px minmax(210px, 1fr);
+        align-items: center;
+        overflow: hidden;
+        background:
+          linear-gradient(100deg, rgba(255,255,255,0.92), rgba(245,248,255,0.78)),
+          radial-gradient(circle at 83% 20%, rgba(124, 146, 255, 0.28), transparent 32%);
+      }
+      .heroMetric > span,
+      .miniStat span,
+      .metricBlock span,
+      .miniMetric span {
+        color: #65718e;
+        font-size: 12px;
+        font-weight: 800;
+      }
+      .heroMetric strong {
+        display: block;
+        margin: 8px 0 10px;
+        font-size: 38px;
+        line-height: 0.9;
+        letter-spacing: -2px;
+        color: #4d62f4;
+        text-shadow: 0 12px 24px rgba(77, 98, 244, 0.22);
+      }
+      .heroMetric div {
+        display: flex;
+        gap: 16px;
+        align-items: center;
+      }
+      .heroMetric em,
+      .heroMetric b {
+        display: inline-flex;
+        min-height: 26px;
+        align-items: center;
+        border-radius: 12px;
+        padding: 0 11px;
+        font-style: normal;
+        font-weight: 900;
+      }
+      .heroMetric em {
+        color: #5e6b89;
+        background: #fff;
+      }
+      .heroMetric b {
+        color: #31b870;
+        background: #e9f8f0;
+      }
+      .heroStats {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 20px;
+      }
+      .miniStat strong {
+        display: block;
+        margin: 7px 0 7px;
+        font-size: 18px;
+        color: #0c1220;
+      }
+      .miniStat strong.positive {
+        color: #111;
+      }
+      .miniStat em {
+        color: #66718e;
+        font-style: normal;
+        font-size: 12px;
+      }
+      .heroVisual {
+        justify-self: end;
+        max-width: 196px;
+        width: 100%;
+        height: auto;
+        object-fit: contain;
+        opacity: 0.86;
+        filter: saturate(1.08) contrast(1.03);
+        mix-blend-mode: multiply;
+        -webkit-mask-image: radial-gradient(ellipse at center, #000 46%, rgba(0, 0, 0, 0.82) 61%, transparent 82%);
+        mask-image: radial-gradient(ellipse at center, #000 46%, rgba(0, 0, 0, 0.82) 61%, transparent 82%);
+      }
+      .mainGrid {
+        display: grid;
+        grid-template-columns: minmax(0, 1.36fr) minmax(330px, 1fr);
+        grid-template-rows: repeat(2, 158px);
+        gap: 12px;
+        margin-top: 12px;
+      }
+      .primeCard {
+        grid-row: span 2;
+        height: 328px;
+        min-height: 0;
+        padding: 15px 18px 10px;
+        overflow: hidden;
+      }
+      .venueCard {
+        height: 158px;
+        min-height: 0;
+        padding: 14px 16px 12px;
+        overflow: hidden;
+      }
+      .cardHeader {
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 10px;
+      }
+      .cardHeader button {
+        border: 0;
+        border-radius: 11px;
+        background: #f4f7ff;
+        color: #6e7894;
+        height: 28px;
+        padding: 0 12px;
+        font-weight: 800;
+      }
+      .venueTitle {
+        gap: 12px;
+      }
+      .venueTitle strong {
+        font-size: 16px;
+        font-weight: 900;
+      }
+      .venueTitle em {
+        padding: 6px 9px;
+        border-radius: 9px;
+        background: #efe6ff;
+        color: #8a55ff;
+        font-style: normal;
+        font-size: 12px;
+        font-weight: 900;
+      }
+      .venueIcon {
+        width: 30px;
+        height: 30px;
+        border-radius: 11px;
+        display: grid;
+        place-items: center;
+        color: #fff;
+        font-weight: 900;
+      }
+      .venueIcon.purple { background: linear-gradient(135deg, #774dff, #b44dff); }
+      .venueIcon.green { background: linear-gradient(135deg, #48bd73, #5ad08c); }
+      .venueIcon.orange { background: linear-gradient(135deg, #ffad4d, #ffbf69); }
+      .venueIcon.blue { background: linear-gradient(135deg, #4773ff, #6f91ff); }
+      .primeMetrics {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 7px 16px;
+      }
+      .metricBlock {
+        min-height: 62px;
+      }
+      .metricBlock span {
+        color: #2d65ff;
+      }
+      .metricBlock.green span {
+        color: #2eb76e;
+      }
+      .metricBlock em {
+        display: block;
+        margin-top: 9px;
+        color: #5f6b85;
+        font-style: normal;
+        font-size: 13px;
+      }
+      .metricBlock strong {
+        display: block;
+        margin-top: 5px;
+        font-size: 18px;
+        color: #050914;
+        letter-spacing: -0.4px;
+      }
+      .metricBlock small,
+      .miniMetric em {
+        display: block;
+        margin-top: 5px;
+        color: #24ad61;
+        font-size: 12px;
+        font-weight: 800;
+      }
+      .sppBlock {
+        grid-column: span 2;
+        min-height: 72px;
+        display: grid;
+        place-content: center;
+        border-radius: 20px;
+        background: radial-gradient(circle, rgba(103, 214, 145, 0.20), transparent 64%);
+        text-align: center;
+      }
+      .sppBlock span,
+      .donutBlock span {
+        color: #111827;
+        font-size: 13px;
+        font-weight: 900;
+      }
+      .sppBlock strong {
+        margin-top: 5px;
+        font-size: 30px;
+        color: #44be73;
+        letter-spacing: -2px;
+      }
+      .sppBlock em {
+        color: #66718e;
+        font-style: normal;
+        font-weight: 800;
+      }
+      .donutBlock {
+        display: grid;
+        place-items: center;
+        gap: 7px;
+        text-align: center;
+      }
+      .donut {
+        width: 52px;
+        height: 52px;
+        border-radius: 50%;
+        display: grid;
+        place-items: center;
+        background: conic-gradient(#4d79ff 0 118deg, #e5ebfb 118deg 360deg);
+      }
+      .donut b {
+        width: 38px;
+        height: 38px;
+        border-radius: 50%;
+        background: #fff;
+        display: grid;
+        place-items: center;
+        color: #5a6784;
+        font-size: 12px;
+      }
+      .miniCurves {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 0;
+        margin: 0 -10px 0;
+      }
+      .miniCurves svg {
+        height: 46px;
+      }
+      .venueMetrics {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 8px;
+        margin-bottom: 7px;
+      }
+      .miniMetric strong {
+        display: block;
+        margin: 4px 0 0;
+        font-size: 14px;
+      }
+      .miniMetric em.down {
+        color: #e1505d;
+      }
+      .progressRow {
+        display: grid;
+        grid-template-columns: 70px 42px minmax(82px, 1fr) 76px;
+        align-items: center;
+        gap: 8px;
+        margin-top: 5px;
+        color: #64708c;
+        font-size: 11px;
+      }
+      .progressRow em {
+        color: #4f5b76;
+        font-style: normal;
+        font-weight: 800;
+      }
+      .progressRow div {
+        height: 7px;
+        border-radius: 999px;
+        background: #edf1f8;
+        overflow: hidden;
+      }
+      .progressRow b {
+        display: block;
+        height: 100%;
+        border-radius: inherit;
+      }
+      .bottomGrid {
+        display: grid;
+        grid-template-columns: minmax(0, 1.3fr) 0.95fr 0.95fr;
+        gap: 14px;
+        margin-top: 12px;
+      }
+      .chartCard,
+      .topListCard {
+        padding: 18px 20px;
+        min-height: 218px;
+      }
+      .legend {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 13px;
+        color: #78839c;
+        font-size: 12px;
+        font-weight: 800;
+      }
+      .legend span::before {
+        content: "";
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        margin-right: 6px;
+        border-radius: 50%;
+        background: #5a82ff;
+      }
+      .legend .green::before { background: #62cd8a; }
+      .legend .orange::before { background: #ffad37; }
+      .trendSvg {
+        width: 100%;
+        height: 156px;
+      }
+      .topListCard.problem {
+        background: linear-gradient(135deg, rgba(255, 255, 255, 0.86), rgba(255, 240, 240, 0.76));
+      }
+      .topListCard.action {
+        background: linear-gradient(135deg, rgba(255, 255, 255, 0.86), rgba(237, 255, 246, 0.78));
+      }
+      .alertIcon,
+      .actionIcon {
+        color: #f26666;
+        font-size: 25px;
+      }
+      .actionIcon {
+        color: #30ba6b;
+      }
+      .cardHeader a {
+        color: #7c86a1;
+        text-decoration: none;
+        font-weight: 800;
+        font-size: 13px;
+      }
+      .rankList {
+        display: grid;
+        gap: 12px;
+      }
+      .rankList article {
+        display: grid;
+        grid-template-columns: 26px minmax(0, 1fr) 42px;
+        gap: 12px;
+        align-items: center;
+      }
+      .rankList b {
+        width: 25px;
+        height: 25px;
+        display: grid;
+        place-items: center;
+        border-radius: 8px;
+        background: #ffdede;
+        color: #ef6464;
+        font-size: 12px;
+      }
+      .action .rankList b {
+        background: #dff7e8;
+        color: #25a760;
+      }
+      .rankList strong {
+        display: block;
+        color: #182033;
+        font-size: 14px;
+      }
+      .rankList span {
+        color: #75809b;
+        font-size: 12px;
+      }
+      .rankList em {
+        justify-self: end;
+        padding: 7px 9px;
+        border-radius: 8px;
+        background: #fff2d9;
+        color: #f0a12b;
+        font-style: normal;
+        font-size: 12px;
+        font-weight: 900;
+      }
+      .rankList em.high {
+        background: #ffe0e0;
+        color: #ef6464;
+      }
+      .emptyCopy {
+        color: #7c86a1;
+        margin: 0;
+      }
+      .aiStrip {
+        min-height: 58px;
+        margin-top: 14px;
+        padding: 0 22px;
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr) 130px;
+        align-items: center;
+        gap: 20px;
+      }
+      .aiStrip div {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        color: #111827;
+        font-weight: 900;
+      }
+      .aiStrip div span {
+        color: #4f67ff;
+        font-size: 24px;
+      }
+      .aiStrip p {
+        margin: 0;
+        color: #62708e;
+        font-size: 14px;
+      }
+      .aiStrip button {
+        border: 0;
+        height: 40px;
+        border-radius: 18px;
+        color: #3c64ff;
+        background: #fff;
+        font-weight: 900;
+      }
+      .detailsRow {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 20px;
+        margin-top: 10px;
+        opacity: 0.72;
+      }
+      .detailsRow details {
+        padding: 10px 14px;
+        color: #66718e;
+      }
+      .detailsRow summary {
+        cursor: pointer;
+        color: #111827;
+        font-weight: 900;
+      }
+      .detailsRow pre {
+        margin: 14px 0 0;
+        white-space: pre-wrap;
+        color: #6b7590;
+        font-family: inherit;
+        font-size: 13px;
+        max-height: 220px;
+        overflow: auto;
+      }
+      .statusGrid {
+        display: grid;
+        gap: 8px;
+        margin-top: 14px;
+        font-size: 13px;
+      }
+      @media (max-width: 1180px) {
+        .lightDashboard {
+          grid-template-columns: 1fr;
+        }
+        .sideRail {
+          position: static;
+          height: auto;
+        }
+        .navStack {
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+        }
+        .heroCard,
+        .mainGrid,
+        .bottomGrid,
+        .detailsRow {
+          grid-template-columns: 1fr;
+        }
+        .heroVisual {
+          display: none;
+        }
+      }
+      @media (max-width: 760px) {
+        .dashboardStage {
+          padding: 20px 14px;
+        }
+        .topBar,
+        .topControls {
+          display: grid;
+          justify-content: stretch;
+        }
+        .navStack {
+          grid-template-columns: 1fr;
+        }
+        .heroMetric strong {
+          font-size: 42px;
+        }
+        .heroStats,
+        .primeMetrics,
+        .venueMetrics {
+          grid-template-columns: 1fr;
+        }
+      }
+    `}</style>
+  );
 }
