@@ -1294,11 +1294,11 @@ function DashboardStyles() {
       }
       .cinemaBottomRow {
         display: grid;
-        grid-template-columns: minmax(120px, 0.9fr) minmax(320px, 2fr) minmax(120px, 0.9fr);
+        grid-template-columns: minmax(120px, 0.85fr) minmax(340px, 2fr) minmax(140px, 0.85fr);
         gap: 18px;
         align-items: end;
         height: 136px;
-        margin-top: 6px;
+        margin-top: 12px;
       }
       .cinemaBottomRow .metricBlock {
         grid-column: 1;
@@ -1308,9 +1308,10 @@ function DashboardStyles() {
         grid-column: 2;
         align-self: end;
         display: grid;
-        grid-template-rows: 76px 44px;
+        grid-template-rows: 82px 44px;
         gap: 2px;
         min-width: 0;
+        transform: translateY(10px);
       }
       .curvePair {
         display: grid;
@@ -1348,29 +1349,31 @@ function DashboardStyles() {
       }
       .donutBlock {
         grid-column: 3;
-        align-self: start;
+        align-self: center;
         display: grid;
         place-items: center;
         gap: 6px;
         text-align: center;
+        transform: translateY(8px);
       }
       .donut {
-        width: 52px;
-        height: 52px;
+        width: 74px;
+        height: 74px;
         border-radius: 50%;
         display: grid;
         place-items: center;
         background: conic-gradient(#4d79ff 0 118deg, #e5ebfb 118deg 360deg);
       }
       .donut b {
-        width: 38px;
-        height: 38px;
+        width: 52px;
+        height: 52px;
         border-radius: 50%;
         background: #fff;
         display: grid;
         place-items: center;
         color: #5a6784;
-        font-size: 12px;
+        font-size: 15px;
+        font-weight: 900;
       }
       .miniCurves {
         display: grid;
