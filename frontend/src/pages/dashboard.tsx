@@ -17,7 +17,6 @@ import {
   fetchOverview,
   fetchWuLaobanFullDetail,
   fetchXiaotieFullDetail,
-  runCollect,
 } from "../lib/dashboardApi";
 import type { WuLaobanFullDetail, XiaotieFullDetail } from "../lib/dashboardApi";
 import type { AlertItem, CinemaOverview, DashboardState, DataQualitySummary, DataSourcePlatformStatus, OverviewData } from "../types/dashboard";
@@ -111,22 +110,34 @@ export default function DashboardPage() {
     [dailyReport, overview, reportSections.headline, topAlerts, topInsights],
   );
 
+  const loadDetailData = useCallback(async () => {
+    const [xiaotieResult, mahjongResult, cinemaTodayResult, cinemaMonthResult, cinemaYearResult] = await Promise.allSettled([
+      fetchXiaotieFullDetail(),
+      fetchWuLaobanFullDetail(),
+      fetchCinemaOverview(undefined, 1),
+      fetchCinemaOverview(undefined, 31),
+      fetchCinemaOverview(undefined, 366),
+    ] as const);
+    if (xiaotieResult.status === "fulfilled" && !xiaotieResult.value.error) setXiaotieDetail(xiaotieResult.value);
+    if (mahjongResult.status === "fulfilled" && !mahjongResult.value.error) setMahjongDetail(mahjongResult.value);
+    setCinemaRanges((previous) => ({
+      ...previous,
+      today: cinemaTodayResult.status === "fulfilled" ? cinemaTodayResult.value : previous.today,
+      month: cinemaMonthResult.status === "fulfilled" ? cinemaMonthResult.value : previous.month,
+      year: cinemaYearResult.status === "fulfilled" ? cinemaYearResult.value : previous.year,
+    }));
+  }, []);
+
   const refreshAll = useCallback(async () => {
     if (refreshing) return;
     setRefreshing(true);
     setCurrentTime(new Date());
     try {
-      await runCollect().catch(() => {});
-      const [overviewResult, sourcesResult, reportResult, qualityResult, xiaotieResult, mahjongResult, cinemaTodayResult, cinemaMonthResult, cinemaYearResult] = await Promise.allSettled([
+      const [overviewResult, sourcesResult, reportResult, qualityResult] = await Promise.allSettled([
         fetchOverview(),
         fetchDataSourcesStatus(),
         fetchDailyReport(),
         fetchDataQualitySummary(),
-        fetchXiaotieFullDetail(),
-        fetchWuLaobanFullDetail(),
-        fetchCinemaOverview(undefined, 1),
-        fetchCinemaOverview(undefined, 31),
-        fetchCinemaOverview(undefined, 366),
       ] as const);
       setState((previous) => ({
         ...previous,
@@ -135,18 +146,11 @@ export default function DashboardPage() {
         dailyReport: reportResult.status === "fulfilled" ? reportResult.value : previous.dailyReport,
         dataQuality: qualityResult.status === "fulfilled" ? qualityResult.value : previous.dataQuality,
       }));
-      if (xiaotieResult.status === "fulfilled" && !xiaotieResult.value.error) setXiaotieDetail(xiaotieResult.value);
-      if (mahjongResult.status === "fulfilled" && !mahjongResult.value.error) setMahjongDetail(mahjongResult.value);
-      setCinemaRanges((previous) => ({
-        ...previous,
-        today: cinemaTodayResult.status === "fulfilled" ? cinemaTodayResult.value : previous.today,
-        month: cinemaMonthResult.status === "fulfilled" ? cinemaMonthResult.value : previous.month,
-        year: cinemaYearResult.status === "fulfilled" ? cinemaYearResult.value : previous.year,
-      }));
+      void loadDetailData();
     } finally {
       setRefreshing(false);
     }
-  }, [refreshing]);
+  }, [loadDetailData, refreshing]);
 
   useEffect(() => {
     if (initialRefreshDone.current) return;
