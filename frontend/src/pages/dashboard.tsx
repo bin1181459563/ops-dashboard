@@ -10,24 +10,32 @@ import { toOverviewBusinessSummaries } from "../lib/businessAdapters";
 import { buildBusinessReportSections } from "../lib/businessReportRules";
 import {
   DATA_MODE,
+  fetchCinemaOverview,
   fetchDailyReport,
   fetchDataQualitySummary,
   fetchDataSourcesStatus,
   fetchOverview,
+  fetchWuLaobanFullDetail,
+  fetchXiaotieFullDetail,
   runCollect,
 } from "../lib/dashboardApi";
-import type { AlertItem, DashboardState, DataQualitySummary, DataSourcePlatformStatus, OverviewData } from "../types/dashboard";
+import type { WuLaobanFullDetail, XiaotieFullDetail } from "../lib/dashboardApi";
+import type { AlertItem, CinemaOverview, DashboardState, DataQualitySummary, DataSourcePlatformStatus, OverviewData } from "../types/dashboard";
 
 type RiskLevel = "low" | "medium" | "high";
 type Accent = "blue" | "green" | "orange";
+type PeriodKey = "today" | "month" | "year";
 
 interface BusinessCard {
   label: string;
   href: string;
   revenue: number;
   orders: number;
+  customers: number;
   utilizationRate: number | null;
   avgOrderValue: number;
+  capacityLabel: string;
+  dataNote: string;
   accent: Accent;
 }
 
@@ -56,19 +64,27 @@ export default function DashboardPage() {
   const [currentTime, setCurrentTime] = useState<Date | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [period, setPeriod] = useState("今日");
+  const [period, setPeriod] = useState<PeriodKey>("today");
+  const [xiaotieDetail, setXiaotieDetail] = useState<XiaotieFullDetail | null>(null);
+  const [mahjongDetail, setMahjongDetail] = useState<WuLaobanFullDetail | null>(null);
+  const [cinemaRanges, setCinemaRanges] = useState<Partial<Record<PeriodKey, CinemaOverview>>>({});
   const initialRefreshDone = useRef(false);
 
   const overview = state.overview?.data;
   const dailyReport = state.dailyReport?.data.report;
   const summaries = useMemo(() => toOverviewBusinessSummaries(overview), [overview]);
-  const businessCards = useMemo(() => getBusinessCards(overview), [overview]);
+  const businessCards = useMemo(
+    () => getBusinessCards(overview, period, { xiaotie: xiaotieDetail, mahjong: mahjongDetail, cinemaRanges }),
+    [cinemaRanges, mahjongDetail, overview, period, xiaotieDetail],
+  );
   const businessAlerts = useMemo(() => selectTopAlerts(generateBusinessAlerts(summaries), 20), [summaries]);
   const topAlerts = useMemo(() => selectTopAlerts(businessAlerts, 3), [businessAlerts]);
   const businessInsights = useMemo(() => generateBusinessInsights({ summaries, alerts: businessAlerts }), [summaries, businessAlerts]);
   const topInsights = useMemo(() => selectTopInsights(businessInsights, 3), [businessInsights]);
   const totalCustomers = calculateCustomerTotal(overview);
-  const availableRooms = roomsAvailable(overview);
+  const periodRevenue = businessCards.reduce((total, item) => total + item.revenue, 0);
+  const periodOrders = businessCards.reduce((total, item) => total + item.orders, 0);
+  const availableRooms = roomsAvailable(overview, xiaotieDetail, mahjongDetail);
   const reportSections = useMemo(
     () => buildBusinessReportSections({
       reportType: "daily",
@@ -101,11 +117,16 @@ export default function DashboardPage() {
     setCurrentTime(new Date());
     try {
       await runCollect().catch(() => {});
-      const [overviewResult, sourcesResult, reportResult, qualityResult] = await Promise.allSettled([
+      const [overviewResult, sourcesResult, reportResult, qualityResult, xiaotieResult, mahjongResult, cinemaTodayResult, cinemaMonthResult, cinemaYearResult] = await Promise.allSettled([
         fetchOverview(),
         fetchDataSourcesStatus(),
         fetchDailyReport(),
         fetchDataQualitySummary(),
+        fetchXiaotieFullDetail(),
+        fetchWuLaobanFullDetail(),
+        fetchCinemaOverview(undefined, 1),
+        fetchCinemaOverview(undefined, 31),
+        fetchCinemaOverview(undefined, 366),
       ] as const);
       setState((previous) => ({
         ...previous,
@@ -113,6 +134,14 @@ export default function DashboardPage() {
         dataSources: sourcesResult.status === "fulfilled" ? sourcesResult.value : previous.dataSources,
         dailyReport: reportResult.status === "fulfilled" ? reportResult.value : previous.dailyReport,
         dataQuality: qualityResult.status === "fulfilled" ? qualityResult.value : previous.dataQuality,
+      }));
+      if (xiaotieResult.status === "fulfilled" && !xiaotieResult.value.error) setXiaotieDetail(xiaotieResult.value);
+      if (mahjongResult.status === "fulfilled" && !mahjongResult.value.error) setMahjongDetail(mahjongResult.value);
+      setCinemaRanges((previous) => ({
+        ...previous,
+        today: cinemaTodayResult.status === "fulfilled" ? cinemaTodayResult.value : previous.today,
+        month: cinemaMonthResult.status === "fulfilled" ? cinemaMonthResult.value : previous.month,
+        year: cinemaYearResult.status === "fulfilled" ? cinemaYearResult.value : previous.year,
       }));
     } finally {
       setRefreshing(false);
@@ -142,15 +171,15 @@ export default function DashboardPage() {
           </div>
           <nav className="navStack">
             {[
-              ["经营概览", "/dashboard", "⌂", true],
-              ["数据分析", "/dashboard/revenue-forecast", "▥", false],
-              ["门店/场馆", "/dashboard/cross-business", "▤", false],
-              ["商品管理", "/dashboard/concession", "▣", false],
-              ["营销活动", "/dashboard/screening-suggestions", "◇", false],
-              ["会员管理", "/dashboard/member", "♧", false],
-              ["财务管理", "/dashboard/profit", "▧", false],
-              ["报表中心", "/dashboard/reports", "▢", false],
-              ["系统设置", "/dashboard/data-quality", "⚙", false],
+              ["今日经营中心", "/dashboard", "今", true],
+              ["AI 预警", "/dashboard/alerts", "预", false],
+              ["AI 报告", "/dashboard/reports", "报", false],
+              ["客户唤醒", "/dashboard/customer-wake-up", "客", false],
+              ["排片建议", "/dashboard/screening-suggestions", "排", false],
+              ["收入预测", "/dashboard/revenue-forecast", "收", false],
+              ["多业务联动", "/dashboard/cross-business", "联", false],
+              ["数据可信度", "/dashboard/data-quality", "数", false],
+              ["审计日志", "/dashboard/audit", "审", false],
             ].map(([label, href, icon, active]) => (
               <Link className={`navItem ${active ? "active" : ""}`} href={String(href)} key={String(label)}>
                 <span>{icon}</span>
@@ -188,17 +217,19 @@ export default function DashboardPage() {
           </header>
 
           <HeroSummaryCard
-            totalRevenue={overview?.total_revenue || 0}
-            totalOrders={overview?.total_orders || 0}
+            totalRevenue={periodRevenue || overview?.total_revenue || 0}
+            totalOrders={periodOrders || overview?.total_orders || 0}
             availableRooms={availableRooms}
+            vending={periodVendingAmount(period, xiaotieDetail)}
             decision={decision}
             currentTime={currentTime}
+            period={period}
           />
 
           <section className="mainGrid">
-            <CinemaPrimeCard card={cinema} cinema={overview?.cinema} period={period} onPeriodChange={setPeriod} />
-            <VenueMiniCard card={billiards} target={50000} period={period} onPeriodChange={setPeriod} />
-            <VenueMiniCard card={mahjong} target={37000} period={period} onPeriodChange={setPeriod} />
+            <CinemaPrimeCard card={cinema} cinema={cinemaRanges[period] || overview?.cinema} period={period} onPeriodChange={setPeriod} />
+            <VenueMiniCard card={billiards} target={periodRevenue} period={period} onPeriodChange={setPeriod} />
+            <VenueMiniCard card={mahjong} target={periodRevenue} period={period} onPeriodChange={setPeriod} />
           </section>
 
           <section className="bottomGrid">
@@ -220,28 +251,32 @@ function HeroSummaryCard({
   totalRevenue,
   totalOrders,
   availableRooms,
+  vending,
   decision,
   currentTime,
+  period,
 }: {
   totalRevenue: number;
   totalOrders: number;
   availableRooms: number;
+  vending: number;
   decision: DecisionModel;
   currentTime: Date | null;
+  period: PeriodKey;
 }) {
   return (
     <section className="heroCard">
       <div className="heroMetric">
-        <span>今日总收入（实收金额）</span>
-        <strong>{currency(totalRevenue || 185700)}</strong>
+        <span>{periodLabel(period)}总收入（实收金额）</span>
+        <strong>{currency(totalRevenue)}</strong>
         <div>
-          <em>较昨日 +¥20,890.50</em>
-          <b>↑ 12.6%</b>
+          <em>来自现有业务接口</em>
+          <b>{periodLabel(period)}</b>
         </div>
       </div>
       <div className="heroStats">
-        <MiniStat label="自助售卖机" value="¥16,800" hint="月累计 835 台" />
-        <MiniStat label="开台/包间总数" value={`${availableRooms || 28} / ${totalOrders ? Math.max(totalOrders, 32) : 32}`} hint="使用中" />
+        <MiniStat label="自助售卖机" value={currency(vending)} hint={vending ? "小铁详情接口" : "暂无售卖机数据"} />
+        <MiniStat label="订单/场次总数" value={formatNumber(totalOrders)} hint={`使用中 ${availableRooms}`} />
         <MiniStat label="数据状态" value={riskHeroLabel(decision.riskLevel)} hint={`最后更新 ${currentTime ? formatTime(currentTime) : "14:30"}`} positive />
       </div>
       <Image className="heroVisual" alt="经营数据趋势插画" src="/images/dashboard-hero-visual-v2.png" width={269} height={240} priority />
@@ -267,13 +302,13 @@ function CinemaPrimeCard({
 }: {
   card: BusinessCard;
   cinema?: OverviewData["cinema"];
-  period: string;
-  onPeriodChange: (value: string) => void;
+  period: PeriodKey;
+  onPeriodChange: (value: PeriodKey) => void;
 }) {
   const concession = cinema?.concession_revenue || Math.round(card.revenue * 0.33);
   const ticket = cinema?.box_office || Math.max(card.revenue - concession, 0);
-  const customers = cinema?.customer_count || card.orders || 2856;
-  const spp = customers ? concession / customers : 21.35;
+  const customers = card.customers || cinema?.customer_count || 0;
+  const spp = customers ? concession / customers : 0;
   return (
     <section className="primeCard">
       <Link className="cardJump" href={card.href} aria-label={`查看${card.label}详情`} />
@@ -286,15 +321,15 @@ function CinemaPrimeCard({
         <PeriodSelect value={period} onChange={onPeriodChange} />
       </div>
       <div className="primeMetrics">
-        <MetricBlock label="票房（流量）" title="票房收入" value={currency(ticket || 125620)} delta="↑ 9.3%" tone="blue" />
-        <MetricBlock label="卖品（利润核心）" title="卖品收入" value={currency(concession || 60955)} delta="↑ 18.6%" tone="green" />
-        <MetricBlock label="客单价" title="客单价" value={`¥${(card.avgOrderValue || 32.88).toFixed(2)}`} delta="↑ 6.3%" />
-        <MetricBlock label="人次" title="人次" value={formatNumber(customers)} delta="↑ 8.7%" />
-        <MetricBlock label="场均票价" title="场均票价" value="¥43.98" delta="↑ 0.6%" />
+        <MetricBlock label="票房（流量）" title="票房收入" value={currency(ticket)} note={card.dataNote} tone="blue" />
+        <MetricBlock label="卖品（利润核心）" title="卖品收入" value={currency(concession)} note={card.dataNote} tone="green" />
+        <MetricBlock label="客单价" title="客单价" value={`¥${(card.avgOrderValue || 0).toFixed(2)}`} note={card.dataNote} />
+        <MetricBlock label="人次" title="人次" value={formatNumber(customers)} note={card.dataNote} />
+        <MetricBlock label="场次数" title="场次数" value={formatNumber(card.orders)} note={card.dataNote} />
         <div className="sppBlock">
           <span>SPP（每人卖品消费）</span>
           <strong>¥{spp.toFixed(2)}</strong>
-          <em>较昨日 ↑ 9.1%</em>
+          <em>{card.dataNote}</em>
         </div>
         <div className="donutBlock">
           <span>卖品收入占比</span>
@@ -309,13 +344,13 @@ function CinemaPrimeCard({
   );
 }
 
-function MetricBlock({ label, title, value, delta, tone }: { label: string; title: string; value: string; delta: string; tone?: "blue" | "green" }) {
+function MetricBlock({ label, title, value, note, tone }: { label: string; title: string; value: string; note: string; tone?: "blue" | "green" }) {
   return (
     <div className={`metricBlock ${tone || ""}`}>
       <span>{label}</span>
       <em>{title}</em>
       <strong>{value}</strong>
-      <small>较昨日 {delta}</small>
+      <small>{note}</small>
     </div>
   );
 }
@@ -328,11 +363,11 @@ function VenueMiniCard({
 }: {
   card: BusinessCard;
   target: number;
-  period: string;
-  onPeriodChange: (value: string) => void;
+  period: PeriodKey;
+  onPeriodChange: (value: PeriodKey) => void;
 }) {
-  const monthly = Math.min(96, Math.max(18, (card.revenue / target) * 100));
-  const yearly = Math.min(88, monthly * 0.78);
+  const utilization = Math.round((card.utilizationRate || 0) * 100);
+  const revenueShare = target ? Math.min(100, Math.round((card.revenue / target) * 100)) : 0;
   return (
     <section className={`venueCard ${card.accent}`}>
       <Link className="cardJump" href={card.href} aria-label={`查看${card.label}详情`} />
@@ -344,45 +379,45 @@ function VenueMiniCard({
         <PeriodSelect value={period} onChange={onPeriodChange} />
       </div>
       <div className="venueMetrics">
-        <MiniMetric label="收入" value={currency(card.revenue)} delta="↑ 6.2%" />
-        <MiniMetric label="人次" value={formatNumber(card.orders)} delta="↑ 5.1%" />
-        <MiniMetric label="利用率" value={percent(card.utilizationRate || 0.64)} delta="↓ 2.3%" warn />
-        <MiniMetric label="客单价" value={`¥${(card.avgOrderValue || 29.99).toFixed(2)}`} delta="↑ 1.1%" />
-        <MiniMetric label={card.label === "台球" ? "开台数" : "包间使用率"} value={card.label === "台球" ? "18" : "13 / 16"} delta="↑ 1" />
+        <MiniMetric label="收入" value={currency(card.revenue)} note={card.dataNote} />
+        <MiniMetric label="人次/订单" value={formatNumber(card.customers || card.orders)} note={card.dataNote} />
+        <MiniMetric label="利用率" value={card.utilizationRate == null ? "-" : percent(card.utilizationRate)} note={card.dataNote} warn={utilization < 35} />
+        <MiniMetric label="客单价" value={`¥${(card.avgOrderValue || 0).toFixed(2)}`} note={card.dataNote} />
+        <MiniMetric label={card.label === "台球" ? "开台数" : "包间使用率"} value={card.capacityLabel} note="实时状态" />
       </div>
-      <ProgressRow label="月完成度" value={monthly} target={target} color={card.accent === "orange" ? "#ffad4d" : "#51bf72"} />
-      <ProgressRow label="年完成度" value={yearly} target={target * 12} color={card.accent === "orange" ? "#ffad4d" : "#51bf72"} />
+      <ProgressRow label="利用率" value={utilization} note={card.capacityLabel} color={card.accent === "orange" ? "#ffad4d" : "#51bf72"} />
+      <ProgressRow label="收入占比" value={revenueShare} note={`总收入 ${currency(target)}`} color={card.accent === "orange" ? "#ffad4d" : "#51bf72"} />
     </section>
   );
 }
 
-function PeriodSelect({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+function PeriodSelect({ value, onChange }: { value: PeriodKey; onChange: (value: PeriodKey) => void }) {
   return (
-    <select className="periodSelect" value={value} onChange={(event) => onChange(event.target.value)} aria-label="切换时间范围">
-      <option>今日</option>
-      <option>本周</option>
-      <option>本月</option>
+    <select className="periodSelect" value={value} onChange={(event) => onChange(event.target.value as PeriodKey)} aria-label="切换时间范围">
+      <option value="today">今日</option>
+      <option value="month">本月</option>
+      <option value="year">本年</option>
     </select>
   );
 }
 
-function MiniMetric({ label, value, delta, warn = false }: { label: string; value: string; delta: string; warn?: boolean }) {
+function MiniMetric({ label, value, note, warn = false }: { label: string; value: string; note: string; warn?: boolean }) {
   return (
     <div className="miniMetric">
       <span>{label}</span>
       <strong>{value}</strong>
-      <em className={warn ? "down" : ""}>较昨日 {delta}</em>
+      <em className={warn ? "down" : ""}>{note}</em>
     </div>
   );
 }
 
-function ProgressRow({ label, value, target, color }: { label: string; value: number; target: number; color: string }) {
+function ProgressRow({ label, value, note, color }: { label: string; value: number; note: string; color: string }) {
   return (
     <div className="progressRow">
       <span>{label}</span>
       <em>{value.toFixed(1)}%</em>
       <div><b style={{ width: `${Math.min(100, value)}%`, background: color }} /></div>
-      <small>目标 {currency(target)}</small>
+      <small>{note}</small>
     </div>
   );
 }
@@ -522,44 +557,103 @@ function MiniCurve({ color, flip = false }: { color: string; flip?: boolean }) {
   );
 }
 
-export function getBusinessCards(overview?: OverviewData): BusinessCard[] {
+export function getBusinessCards(
+  overview?: OverviewData,
+  period: PeriodKey = "today",
+  details: {
+    xiaotie?: XiaotieFullDetail | null;
+    mahjong?: WuLaobanFullDetail | null;
+    cinemaRanges?: Partial<Record<PeriodKey, CinemaOverview>>;
+  } = {},
+): BusinessCard[] {
   if (!overview) {
     return [
-      { label: "影院", href: "/dashboard/cinema", revenue: 185700, orders: 2856, utilizationRate: 0.724, avgOrderValue: 32.88, accent: "blue" },
-      { label: "台球", href: "/dashboard/billiards", revenue: 36850, orders: 1245, utilizationRate: 0.684, avgOrderValue: 29.99, accent: "green" },
-      { label: "棋牌", href: "/dashboard/mahjong", revenue: 24105, orders: 856, utilizationRate: 0.621, avgOrderValue: 28.18, accent: "orange" },
+      emptyBusinessCard("影院", "/dashboard/cinema", "blue"),
+      emptyBusinessCard("台球", "/dashboard/billiards", "green"),
+      emptyBusinessCard("棋牌", "/dashboard/mahjong", "orange"),
     ];
   }
   const [billiardsSummary, mahjongSummary, cinemaSummary] = toOverviewBusinessSummaries(overview);
+  const xiaotieSummary = xiaotiePeriodSummary(details.xiaotie, period);
+  const mahjongPeriod = mahjongPeriodSummary(details.mahjong, period);
+  const cinemaPeriod = details.cinemaRanges?.[period] || overview.cinema;
+  const cinemaRevenue = period === "today" ? cinemaSummary.revenue || overview.cinema?.revenue || 0 : cinemaPeriod?.revenue || 0;
+  const cinemaOrders = period === "today" ? cinemaSummary.orders || overview.cinema?.screenings || 0 : cinemaPeriod?.screenings || 0;
+  const cinemaCustomers = period === "today" ? cinemaSummary.customers || overview.cinema?.customer_count || 0 : cinemaPeriod?.customer_count || 0;
   return [
     {
       label: "影院",
       href: "/dashboard/cinema",
-      revenue: cinemaSummary.revenue || overview?.cinema?.revenue || 0,
-      orders: cinemaSummary.orders || overview?.cinema?.screenings || 0,
-      utilizationRate: cinemaSummary.utilizationRate || overview?.cinema?.occupancy_rate || 0,
-      avgOrderValue: cinemaSummary.avgOrderValue || overview?.cinema?.avg_order_value || 0,
+      revenue: cinemaRevenue,
+      orders: cinemaOrders,
+      customers: cinemaCustomers,
+      utilizationRate: period === "today" ? cinemaSummary.utilizationRate || overview.cinema?.occupancy_rate || 0 : cinemaPeriod?.occupancy_rate || 0,
+      avgOrderValue: period === "today" ? cinemaSummary.avgOrderValue || overview.cinema?.avg_order_value || 0 : cinemaPeriod?.avg_order_value || 0,
+      capacityLabel: `${cinemaOrders} 场`,
+      dataNote: period === "today" ? "凤凰云智今日" : `凤凰云智${periodLabel(period)}`,
       accent: "blue",
     },
     {
       label: "台球",
       href: "/dashboard/billiards",
-      revenue: billiardsSummary.revenue,
-      orders: billiardsSummary.orders,
+      revenue: xiaotieSummary?.revenue ?? billiardsSummary.revenue,
+      orders: xiaotieSummary?.orders ?? billiardsSummary.orders,
+      customers: xiaotieSummary?.customers ?? billiardsSummary.customers,
       utilizationRate: billiardsSummary.utilizationRate,
-      avgOrderValue: billiardsSummary.avgOrderValue || 29.99,
+      avgOrderValue: average(xiaotieSummary?.revenue ?? billiardsSummary.revenue, xiaotieSummary?.orders ?? billiardsSummary.orders),
+      capacityLabel: details.xiaotie ? `${details.xiaotie.busy_count || 0} / ${details.xiaotie.total_count || 0}` : "-",
+      dataNote: details.xiaotie ? `小铁${periodLabel(period)}` : "小铁概览",
       accent: "green",
     },
     {
       label: "棋牌",
       href: "/dashboard/mahjong",
-      revenue: mahjongSummary.revenue,
-      orders: mahjongSummary.orders,
-      utilizationRate: mahjongSummary.utilizationRate,
-      avgOrderValue: mahjongSummary.avgOrderValue || 28.18,
+      revenue: mahjongPeriod?.revenue ?? mahjongSummary.revenue,
+      orders: mahjongPeriod?.orders ?? mahjongSummary.orders,
+      customers: mahjongPeriod?.customers ?? mahjongSummary.customers,
+      utilizationRate: details.mahjong ? ratio(details.mahjong.active_orders, details.mahjong.total_rooms) : mahjongSummary.utilizationRate,
+      avgOrderValue: average(mahjongPeriod?.revenue ?? mahjongSummary.revenue, mahjongPeriod?.orders ?? mahjongSummary.orders),
+      capacityLabel: details.mahjong ? `${details.mahjong.active_orders || 0} / ${details.mahjong.total_rooms || 0}` : "-",
+      dataNote: details.mahjong ? `無老板${periodLabel(period)}` : "無老板概览",
       accent: "orange",
     },
   ];
+}
+
+function emptyBusinessCard(label: string, href: string, accent: Accent): BusinessCard {
+  return {
+    label,
+    href,
+    revenue: 0,
+    orders: 0,
+    customers: 0,
+    utilizationRate: null,
+    avgOrderValue: 0,
+    capacityLabel: "-",
+    dataNote: "等待数据",
+    accent,
+  };
+}
+
+function xiaotiePeriodSummary(detail: XiaotieFullDetail | null | undefined, period: PeriodKey) {
+  if (!detail) return null;
+  const summary = period === "year" ? detail.summary_year : period === "month" ? detail.summary_month : detail.summary_today;
+  const record = summary as { revenue?: number; order_count?: number; face_count?: number; member_count?: number };
+  return {
+    revenue: Number(record.revenue || 0),
+    orders: Number(record.order_count || 0),
+    customers: Number(record.face_count || record.member_count || record.order_count || 0),
+  };
+}
+
+function mahjongPeriodSummary(detail: WuLaobanFullDetail | null | undefined, period: PeriodKey) {
+  if (!detail) return null;
+  const summary = period === "year" ? detail.summary_year : period === "month" ? detail.summary_month : detail.summary_today;
+  return {
+    revenue: Number(summary?.revenue || 0),
+    orders: Number(summary?.order_count || 0),
+    customers: Number(summary?.user_count || summary?.order_count || 0),
+  };
 }
 
 export function buildAiInsights(overview?: OverviewData, alerts: AlertItem[] = [], report?: string): AiInsightItem[] {
@@ -638,10 +732,11 @@ function buildDecisionModel(input: {
   };
 }
 
-function roomsAvailable(overview?: OverviewData): number {
-  const orders = overview?.total_orders || 0;
-  if (!orders) return 28;
-  return Math.min(32, Math.max(1, orders));
+function roomsAvailable(overview?: OverviewData, xiaotie?: XiaotieFullDetail | null, mahjong?: WuLaobanFullDetail | null): number {
+  const billiardsBusy = xiaotie?.busy_count || 0;
+  const mahjongBusy = mahjong?.active_orders || 0;
+  if (billiardsBusy || mahjongBusy) return billiardsBusy + mahjongBusy;
+  return overview?.total_orders || 0;
 }
 
 function calculateCustomerTotal(overview?: OverviewData): number {
@@ -698,6 +793,30 @@ function formatNumber(value: number): string {
 
 function percent(value: number): string {
   return `${Math.round(Number(value || 0) * 100)}%`;
+}
+
+function periodLabel(period: PeriodKey): string {
+  return { today: "今日", month: "本月", year: "本年" }[period];
+}
+
+function periodVendingAmount(period: PeriodKey, detail?: XiaotieFullDetail | null): number {
+  const vending = detail?.vending;
+  if (!vending) return 0;
+  if (period === "year") return Number(vending.year_amount || 0);
+  if (period === "month") return Number(vending.month_amount || 0);
+  return Number(vending.today_amount || 0);
+}
+
+function average(total?: number | null, count?: number | null): number {
+  const safeTotal = Number(total || 0);
+  const safeCount = Number(count || 0);
+  return safeCount ? safeTotal / safeCount : 0;
+}
+
+function ratio(part?: number | null, total?: number | null): number | null {
+  const safePart = Number(part || 0);
+  const safeTotal = Number(total || 0);
+  return safeTotal ? safePart / safeTotal : null;
 }
 
 function shortText(value: string, maxLength: number): string {

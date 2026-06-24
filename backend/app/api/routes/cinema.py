@@ -152,7 +152,7 @@ async def import_cinema_batch(request: Request, files: list[UploadFile] = File(.
 def get_cinema_overview(
     request: Request,
     date: str | None = Query(default=None),
-    days: int = Query(default=1, ge=1, le=90),
+    days: int = Query(default=1, ge=1, le=366),
     start_date: str | None = Query(default=None),
 ) -> dict:
     return cinema_overview(request.app.state.repository, target_date=date, days=days, start_date=start_date)
@@ -162,7 +162,7 @@ def get_cinema_overview(
 def get_cinema_detail(
     request: Request,
     date: str | None = Query(default=None),
-    days: int = Query(default=30, ge=1, le=90),
+    days: int = Query(default=30, ge=1, le=366),
     start_date: str | None = Query(default=None),
 ) -> dict:
     return cinema_detail(request.app.state.repository, target_date=date, days=days, start_date=start_date)
