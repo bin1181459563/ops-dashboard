@@ -103,3 +103,22 @@ def test_collection_job_returns_platform_results_with_retry_details(tmp_path, mo
     assert qgcloud["status"] == "skipped"
     assert qgcloud["retried"] is False
     assert qgcloud["retry_count"] == 0
+
+
+def test_collection_job_records_business_type_in_sync_logs(tmp_path, monkeypatch):
+    def raise_token_error():
+        raise PermissionError("小铁 token 已失效")
+
+    monkeypatch.setattr("app.tasks.collect_job.collect_xiaotie_raw", raise_token_error)
+    monkeypatch.setattr("app.tasks.collect_job.collect_wu_laoban_raw", mock_wu_laoban_raw)
+    monkeypatch.setattr("app.tasks.collect_job.collect_qgcloud_raw", lambda: None)
+    repo = DashboardRepository(tmp_path / "ops_dashboard.db")
+    repo.initialize()
+    job = CollectionJob(repository=repo)
+
+    job.run_once()
+
+    logs = {item["platform"]: item for item in repo.latest_sync_logs(limit=10)}
+    assert logs["xiaotie"]["business_type"] == "billiards"
+    assert logs["wu_laoban"]["business_type"] == "mahjong"
+    assert logs["qgcloud"]["business_type"] == "vending"
