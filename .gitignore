@@ -1,0 +1,27 @@
+# Runtime logs
+logs/*.log
+logs/archive/
+
+# Frontend build/cache/dependencies
+frontend/.next/
+frontend/node_modules/
+frontend/.env.local
+frontend/tsconfig.tsbuildinfo
+
+# Python cache/test artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+backend/.pytest_cache/
+backend/**/__pycache__/
+scripts/**/__pycache__/
+.superpowers/
+
+# Local runtime/database artifacts
+*.pid
+*.db
+data/*.db
+backend/*.db
+backend/.env
+tmp/
+.DS_Store

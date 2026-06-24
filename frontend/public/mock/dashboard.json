@@ -1,0 +1,127 @@
+{
+  "overview": {
+    "data": {
+      "store_id": "feicuicheng",
+      "total_revenue": 2314,
+      "platforms": {
+        "xiaotie": {
+          "platform": "xiaotie",
+          "store_id": "feicuicheng",
+          "revenue": 1388,
+          "orders": 34,
+          "usage_rate": 0.62,
+          "time": "2026-06-18T07:20:00+00:00",
+          "source": "mock"
+        },
+        "wu_laoban": {
+          "platform": "wu_laoban",
+          "store_id": "feicuicheng",
+          "revenue": 926,
+          "orders": 21,
+          "usage_rate": 0.6,
+          "time": "2026-06-18T07:20:00+00:00",
+          "source": "mock"
+        }
+      },
+      "cinema": {
+        "status": "not_imported",
+        "data_source": "excel",
+        "date": null,
+        "revenue": 0,
+        "box_office": 0,
+        "concession_revenue": 0,
+        "customer_count": 0,
+        "screenings": 0,
+        "occupancy_rate": 0,
+        "avg_order_value": 0,
+        "last_import_time": null,
+        "message": "请上传凤凰云智 Excel"
+      },
+      "alerts": [
+        {
+          "platform": "xiaotie",
+          "store_id": "feicuicheng",
+          "alert_type": "usage_drop",
+          "message": "台球利用率较上一轮下降超过30%",
+          "level": "critical",
+          "time": "2026-06-18T07:18:00+00:00"
+        },
+        {
+          "platform": "wu_laoban",
+          "store_id": "feicuicheng",
+          "alert_type": "low_usage",
+          "message": "棋牌当前利用率低于15%",
+          "level": "warning",
+          "time": "2026-06-18T07:15:00+00:00"
+        }
+      ]
+    },
+    "time": "2026-06-18T07:20:00+00:00",
+    "source": "mock"
+  },
+  "revenue": {
+    "data": [
+      { "platform": "xiaotie", "store_id": "feicuicheng", "revenue": 1388, "time": "2026-06-18T07:20:00+00:00", "source": "mock" },
+      { "platform": "wu_laoban", "store_id": "feicuicheng", "revenue": 926, "time": "2026-06-18T07:20:00+00:00", "source": "mock" },
+      { "platform": "xiaotie", "store_id": "feicuicheng", "revenue": 1240, "time": "2026-06-18T07:10:00+00:00", "source": "mock" },
+      { "platform": "wu_laoban", "store_id": "feicuicheng", "revenue": 880, "time": "2026-06-18T07:10:00+00:00", "source": "mock" }
+    ],
+    "time": "2026-06-18T07:20:00+00:00",
+    "source": "mock"
+  },
+  "orders": {
+    "data": [
+      { "platform": "xiaotie", "store_id": "feicuicheng", "orders": 34, "time": "2026-06-18T07:20:00+00:00", "source": "mock" },
+      { "platform": "wu_laoban", "store_id": "feicuicheng", "orders": 21, "time": "2026-06-18T07:19:10+00:00", "source": "mock" },
+      { "platform": "xiaotie", "store_id": "feicuicheng", "orders": 31, "time": "2026-06-18T07:18:00+00:00", "source": "mock" },
+      { "platform": "wu_laoban", "store_id": "feicuicheng", "orders": 19, "time": "2026-06-18T07:17:20+00:00", "source": "mock" },
+      { "platform": "xiaotie", "store_id": "feicuicheng", "orders": 29, "time": "2026-06-18T07:16:00+00:00", "source": "mock" }
+    ],
+    "time": "2026-06-18T07:20:00+00:00",
+    "source": "mock"
+  },
+  "usage": {
+    "data": [
+      { "platform": "xiaotie", "store_id": "feicuicheng", "usage_rate": 0.62, "time": "2026-06-18T07:20:00+00:00", "source": "mock" },
+      { "platform": "wu_laoban", "store_id": "feicuicheng", "usage_rate": 0.6, "time": "2026-06-18T07:20:00+00:00", "source": "mock" },
+      { "platform": "xiaotie", "store_id": "feicuicheng", "usage_rate": 0.58, "time": "2026-06-18T07:10:00+00:00", "source": "mock" },
+      { "platform": "wu_laoban", "store_id": "feicuicheng", "usage_rate": 0.5, "time": "2026-06-18T07:10:00+00:00", "source": "mock" },
+      { "platform": "xiaotie", "store_id": "feicuicheng", "usage_rate": 0.73, "time": "2026-06-18T07:00:00+00:00", "source": "mock" },
+      { "platform": "wu_laoban", "store_id": "feicuicheng", "usage_rate": 0.7, "time": "2026-06-18T07:00:00+00:00", "source": "mock" },
+      { "platform": "xiaotie", "store_id": "feicuicheng", "usage_rate": 0.69, "time": "2026-06-18T06:50:00+00:00", "source": "mock" },
+      { "platform": "wu_laoban", "store_id": "feicuicheng", "usage_rate": 0.65, "time": "2026-06-18T06:50:00+00:00", "source": "mock" }
+    ],
+    "time": "2026-06-18T07:20:00+00:00",
+    "source": "mock"
+  },
+  "alerts": {
+    "data": [
+      {
+        "platform": "xiaotie",
+        "store_id": "feicuicheng",
+        "alert_type": "usage_drop",
+        "message": "台球利用率较上一轮下降超过30%",
+        "level": "critical",
+        "time": "2026-06-18T07:18:00+00:00"
+      },
+      {
+        "platform": "wu_laoban",
+        "store_id": "feicuicheng",
+        "alert_type": "low_usage",
+        "message": "棋牌当前利用率低于15%",
+        "level": "warning",
+        "time": "2026-06-18T07:15:00+00:00"
+      },
+      {
+        "platform": "xiaotie",
+        "store_id": "feicuicheng",
+        "alert_type": "revenue_drop",
+        "message": "台球收入较上一轮下降超过40%",
+        "level": "critical",
+        "time": "2026-06-18T07:05:00+00:00"
+      }
+    ],
+    "time": "2026-06-18T07:20:00+00:00",
+    "source": "mock"
+  }
+}
