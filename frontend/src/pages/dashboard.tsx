@@ -332,13 +332,17 @@ function CinemaPrimeCard({
       </div>
       <div className="cinemaBottomRow">
         <MetricBlock label="场次数" title="场次数" value={formatNumber(card.orders)} note={card.dataNote} compact />
-        <div className="sppBlock">
-          <span>SPP（每人卖品消费）</span>
-          <strong>¥{spp.toFixed(2)}</strong>
-          <em>{card.dataNote}</em>
+        <div className="sppArea">
+          <div className="sppBlock">
+            <span>SPP（每人卖品消费）</span>
+            <strong>¥{spp.toFixed(2)}</strong>
+            <em>{card.dataNote}</em>
+          </div>
+          <div className="curvePair">
+            <MiniCurve color="#586eff" />
+            <MiniCurve color="#63d891" flip />
+          </div>
         </div>
-        <MiniCurve color="#586eff" />
-        <MiniCurve color="#63d891" flip />
         <div className="donutBlock">
           <span>卖品收入占比</span>
           <div className="donut"><b>{percent(card.revenue ? concession / card.revenue : 0.327)}</b></div>
@@ -1163,7 +1167,7 @@ function DashboardStyles() {
         grid-row: span 2;
         height: 352px;
         min-height: 0;
-        padding: 16px 18px 12px;
+        padding: 16px 18px 14px;
         overflow: hidden;
       }
       .venueCard {
@@ -1248,7 +1252,7 @@ function DashboardStyles() {
       .primeMetrics {
         display: grid;
         grid-template-columns: repeat(4, minmax(0, 1fr));
-        grid-template-rows: 98px;
+        grid-template-rows: 92px;
         gap: 8px 14px;
         align-items: stretch;
       }
@@ -1290,34 +1294,35 @@ function DashboardStyles() {
       }
       .cinemaBottomRow {
         display: grid;
-        grid-template-columns: minmax(120px, 0.95fr) minmax(160px, 1.08fr) minmax(160px, 1.08fr) minmax(120px, 0.95fr);
-        grid-template-rows: 58px 48px;
-        gap: 0 14px;
-        align-items: center;
-        margin-top: 0;
+        grid-template-columns: minmax(120px, 0.9fr) minmax(320px, 2fr) minmax(120px, 0.9fr);
+        gap: 18px;
+        align-items: end;
+        height: 136px;
+        margin-top: 6px;
       }
       .cinemaBottomRow .metricBlock {
         grid-column: 1;
-        grid-row: 1 / 3;
         align-self: start;
       }
-      .cinemaBottomRow > svg {
+      .sppArea {
+        grid-column: 2;
+        align-self: end;
+        display: grid;
+        grid-template-rows: 76px 44px;
+        gap: 2px;
+        min-width: 0;
+      }
+      .curvePair {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 16px;
+        align-items: end;
+      }
+      .curvePair svg {
         width: 100%;
         height: 42px;
-        align-self: end;
-      }
-      .cinemaBottomRow > svg:nth-of-type(1) {
-        grid-column: 2;
-        grid-row: 2;
-      }
-      .cinemaBottomRow > svg:nth-of-type(2) {
-        grid-column: 3;
-        grid-row: 2;
       }
       .sppBlock {
-        grid-column: 2 / 4;
-        grid-row: 1;
-        min-height: 0;
         display: grid;
         place-content: center;
         border-radius: 16px;
@@ -1342,8 +1347,8 @@ function DashboardStyles() {
         font-weight: 800;
       }
       .donutBlock {
-        grid-column: 4;
-        grid-row: 1 / 3;
+        grid-column: 3;
+        align-self: start;
         display: grid;
         place-items: center;
         gap: 6px;
