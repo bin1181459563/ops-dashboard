@@ -1,4 +1,5 @@
 import Head from "next/head";
+import { AppShell, PageHeader } from "../../components/dashboard";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { fetchMemberAnalysis } from "../../lib/dashboardApi";
@@ -38,7 +39,7 @@ export default function MemberAnalysisPage() {
   return (
     <>
       <Head><title>会员消费分析 - 翡翠城经营驾驶舱</title></Head>
-      <main className="dashboardShell">
+      <AppShell currentPage="/dashboard/member">
         <div className="topBar">
           <div>
             <Link href="/dashboard/cinema" className="backLink">← 返回影院详情</Link>
@@ -199,7 +200,7 @@ export default function MemberAnalysisPage() {
         {data && data.status === "no_data" && (
           <div className="emptyState">{data.message}</div>
         )}
-      </main>
+      </AppShell>
     </>
   );
 }

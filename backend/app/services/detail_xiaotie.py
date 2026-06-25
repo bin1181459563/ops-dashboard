@@ -2,6 +2,7 @@
 台球详情API - 全量数据：球桌状态、收入概览、每桌排行、会员TOP、时段分布、经营数据、评论/异常/投诉
 """
 import ssl
+import time
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -722,7 +723,7 @@ def get_xiaotie_full_detail() -> dict | None:
             })
 
         # === 组装返回 ===
-        return {
+        result = {
             # 球桌实时状态
             "tables": tables,
             "busy_count": sum(1 for t in tables if t["open"]),
@@ -915,6 +916,8 @@ def get_xiaotie_full_detail() -> dict | None:
             # 售卖机数据
             "vending": _get_vending_data(),
         }
+        
+        return result
 
     except Exception as e:
         print(f"[xiaotie_full_detail] 获取失败: {e}")

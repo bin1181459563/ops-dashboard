@@ -1,4 +1,5 @@
 import Head from "next/head";
+import { AppShell, PageHeader } from "../../components/dashboard";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { getDashboardErrorMessage } from "../../components/dashboard/DashboardStatePanel";
@@ -139,8 +140,8 @@ export default function MahjongPage() {
 
   return (
     <>
-      <Head><title>棋牌详情 - 翡翠城经营驾驶舱</title></Head>
-      <main className="dashboardShell">
+      <Head><title>🀄 棋牌详情 · 翡翠城经营驾驶舱</title></Head>
+      <AppShell currentPage="/dashboard/mahjong">
         {/* 顶栏 */}
         <div className="topBar">
           <div>
@@ -514,7 +515,7 @@ export default function MahjongPage() {
         )}
 
         {!data && !error && !loading && <div className="emptyState">点击"手动刷新"加载数据</div>}
-      </main>
+      </AppShell>
 
       <style jsx>{`
         .backLink {

@@ -1,4 +1,5 @@
 import Head from "next/head";
+import { AppShell, PageHeader } from "../../components/dashboard";
 import Link from "next/link";
 import { ChangeEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { CinemaTrendChart } from "../../components/dashboard/CinemaTrendChart";
@@ -36,7 +37,10 @@ export default function CinemaPage() {
       // 自然周：周一到今天
       const monday = new Date(now);
       monday.setDate(now.getDate() - now.getDay() + (now.getDay() === 0 ? -6 : 1));
-      return monday.toISOString().split("T")[0];
+      const y = monday.getFullYear();
+      const m = String(monday.getMonth() + 1).padStart(2, "0");
+      const d = String(monday.getDate()).padStart(2, "0");
+      return `${y}-${m}-${d}`;
     }
     if (dateMode === "month") {
       // 自然月：1号到今天
@@ -120,8 +124,8 @@ export default function CinemaPage() {
 
   return (
     <>
-      <Head><title>影院详情 - 翡翠城经营驾驶舱</title></Head>
-      <main className="dashboardShell">
+      <Head><title>🎬 影院详情 · 翡翠城经营驾驶舱</title></Head>
+      <AppShell currentPage="/dashboard/cinema">
         <div className="topBar">
           <div>
             <Link href="/dashboard" className="backLink">← 返回驾驶舱</Link>
@@ -309,7 +313,7 @@ export default function CinemaPage() {
             </section>
           </>
         )}
-      </main>
+      </AppShell>
     </>
   );
 }

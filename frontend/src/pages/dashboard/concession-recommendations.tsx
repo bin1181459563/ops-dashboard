@@ -1,4 +1,5 @@
 import Head from "next/head";
+import { AppShell, PageHeader } from "../../components/dashboard";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { DashboardStatePanel, getDashboardErrorMessage } from "../../components/dashboard/DashboardStatePanel";
@@ -45,7 +46,7 @@ export default function ConcessionRecommendationsPage() {
   return (
     <>
       <Head><title>🍿 卖品推荐 - 翡翠城经营驾驶舱</title></Head>
-      <main className="dashboardShell">
+      <AppShell currentPage="/dashboard/concession-recommendations">
         <div className="topBar">
           <div>
             <Link href="/dashboard" className="backLink">← 返回驾驶舱</Link>
@@ -241,7 +242,7 @@ export default function ConcessionRecommendationsPage() {
             compact
           />
         ) : null}
-      </main>
+      </AppShell>
 
       <style jsx>{`
         .errorBanner {

@@ -10,6 +10,7 @@ import { toOverviewBusinessSummaries } from "../lib/businessAdapters";
 import { buildBusinessReportSections } from "../lib/businessReportRules";
 import {
   DATA_MODE,
+  fetchBudget,
   fetchCinemaOverview,
   fetchDailyReport,
   fetchDataQualitySummary,
@@ -18,12 +19,12 @@ import {
   fetchWuLaobanFullDetail,
   fetchXiaotieFullDetail,
 } from "../lib/dashboardApi";
-import type { WuLaobanFullDetail, XiaotieFullDetail } from "../lib/dashboardApi";
+import type { BudgetData, WuLaobanFullDetail, XiaotieFullDetail } from "../lib/dashboardApi";
 import type { AlertItem, CinemaOverview, DashboardState, DataQualitySummary, DataSourcePlatformStatus, OverviewData } from "../types/dashboard";
 
 type RiskLevel = "low" | "medium" | "high";
 type Accent = "blue" | "green" | "orange";
-type PeriodKey = "today" | "month" | "year";
+type PeriodKey = "today" | "yesterday" | "month" | "year";
 
 interface BusinessCard {
   label: string;
@@ -63,18 +64,22 @@ export default function DashboardPage() {
   const [currentTime, setCurrentTime] = useState<Date | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [period, setPeriod] = useState<PeriodKey>("today");
+  const [cinemaPeriod, setCinemaPeriod] = useState<PeriodKey>("yesterday");
+  const [billiardsPeriod, setBilliardsPeriod] = useState<PeriodKey>("today");
+  const [mahjongPeriod, setMahjongPeriod] = useState<PeriodKey>("today");
   const [xiaotieDetail, setXiaotieDetail] = useState<XiaotieFullDetail | null>(null);
   const [mahjongDetail, setMahjongDetail] = useState<WuLaobanFullDetail | null>(null);
   const [cinemaRanges, setCinemaRanges] = useState<Partial<Record<PeriodKey, CinemaOverview>>>({});
+  const [budget, setBudget] = useState<BudgetData | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
   const initialRefreshDone = useRef(false);
 
   const overview = state.overview?.data;
   const dailyReport = state.dailyReport?.data.report;
   const summaries = useMemo(() => toOverviewBusinessSummaries(overview), [overview]);
   const businessCards = useMemo(
-    () => getBusinessCards(overview, period, { xiaotie: xiaotieDetail, mahjong: mahjongDetail, cinemaRanges }),
-    [cinemaRanges, mahjongDetail, overview, period, xiaotieDetail],
+    () => getBusinessCards(overview, { cinema: cinemaPeriod, billiards: billiardsPeriod, mahjong: mahjongPeriod }, { xiaotie: xiaotieDetail, mahjong: mahjongDetail, cinemaRanges }),
+    [cinemaRanges, mahjongDetail, overview, cinemaPeriod, billiardsPeriod, mahjongPeriod, xiaotieDetail],
   );
   const businessAlerts = useMemo(() => selectTopAlerts(generateBusinessAlerts(summaries), 20), [summaries]);
   const topAlerts = useMemo(() => selectTopAlerts(businessAlerts, 3), [businessAlerts]);
@@ -87,7 +92,7 @@ export default function DashboardPage() {
   const reportSections = useMemo(
     () => buildBusinessReportSections({
       reportType: "daily",
-      reportDate: currentTime?.toISOString().slice(0, 10) || "2026-06-24",
+      reportDate: currentTime ? `${currentTime.getFullYear()}-${String(currentTime.getMonth()+1).padStart(2,"0")}-${String(currentTime.getDate()).padStart(2,"0")}` : "2026-06-24",
       summary: {
         total_revenue: overview?.total_revenue || 0,
         total_orders: overview?.total_orders || 0,
@@ -110,11 +115,24 @@ export default function DashboardPage() {
     [dailyReport, overview, reportSections.headline, topAlerts, topInsights],
   );
 
+  // 用本地时间格式化日期（避免 toISOString() 返回 UTC 导致日期偏移）
+  const formatLocalDate = useCallback((d: Date) => {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+  }, []);
+
   const loadDetailData = useCallback(async () => {
+    // 影院数据每天晚上导入，所以"今日"显示的是昨日数据
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    const yesterdayStr = formatLocalDate(yesterday);
+    
     const [xiaotieResult, mahjongResult, cinemaTodayResult, cinemaMonthResult, cinemaYearResult] = await Promise.allSettled([
       fetchXiaotieFullDetail(),
       fetchWuLaobanFullDetail(),
-      fetchCinemaOverview(undefined, 1),
+      fetchCinemaOverview(yesterdayStr, 1),  // 影院显示昨日数据
       fetchCinemaOverview(undefined, 31),
       fetchCinemaOverview(undefined, 366),
     ] as const);
@@ -122,6 +140,7 @@ export default function DashboardPage() {
     if (mahjongResult.status === "fulfilled" && !mahjongResult.value.error) setMahjongDetail(mahjongResult.value);
     setCinemaRanges((previous) => ({
       ...previous,
+      yesterday: cinemaTodayResult.status === "fulfilled" ? cinemaTodayResult.value : previous.yesterday,
       today: cinemaTodayResult.status === "fulfilled" ? cinemaTodayResult.value : previous.today,
       month: cinemaMonthResult.status === "fulfilled" ? cinemaMonthResult.value : previous.month,
       year: cinemaYearResult.status === "fulfilled" ? cinemaYearResult.value : previous.year,
@@ -133,12 +152,15 @@ export default function DashboardPage() {
     setRefreshing(true);
     setCurrentTime(new Date());
     try {
-      const [overviewResult, sourcesResult, reportResult, qualityResult] = await Promise.allSettled([
+      // 第一阶段：快速数据（总览、数据源状态等）~1秒
+      const [overviewResult, sourcesResult, reportResult, qualityResult, budgetResult] = await Promise.allSettled([
         fetchOverview(),
         fetchDataSourcesStatus(),
         fetchDailyReport(),
         fetchDataQualitySummary(),
+        fetchBudget(),
       ] as const);
+      
       setState((previous) => ({
         ...previous,
         overview: overviewResult.status === "fulfilled" ? overviewResult.value : previous.overview,
@@ -146,9 +168,16 @@ export default function DashboardPage() {
         dailyReport: reportResult.status === "fulfilled" ? reportResult.value : previous.dailyReport,
         dataQuality: qualityResult.status === "fulfilled" ? qualityResult.value : previous.dataQuality,
       }));
-      void loadDetailData();
-    } finally {
+      if (budgetResult.status === "fulfilled") setBudget(budgetResult.value);
+      
+      // 第二阶段：详情数据（台球、麻将、影院）~15秒，有加载指示器
       setRefreshing(false);
+      setDetailLoading(true);
+      await loadDetailData();
+      setDetailLoading(false);
+    } catch {
+      setRefreshing(false);
+      setDetailLoading(false);
     }
   }, [loadDetailData, refreshing]);
 
@@ -224,16 +253,16 @@ export default function DashboardPage() {
             totalRevenue={periodRevenue || overview?.total_revenue || 0}
             totalOrders={periodOrders || overview?.total_orders || 0}
             availableRooms={availableRooms}
-            vending={periodVendingAmount(period, xiaotieDetail)}
+            vending={periodVendingAmount(billiardsPeriod, xiaotieDetail)}
             decision={decision}
             currentTime={currentTime}
-            period={period}
+            period={cinemaPeriod}
           />
 
           <section className="mainGrid">
-            <CinemaPrimeCard card={cinema} cinema={cinemaRanges[period] || overview?.cinema} period={period} onPeriodChange={setPeriod} />
-            <VenueMiniCard card={billiards} target={periodRevenue} period={period} onPeriodChange={setPeriod} />
-            <VenueMiniCard card={mahjong} target={periodRevenue} period={period} onPeriodChange={setPeriod} />
+            <CinemaPrimeCard card={cinema} cinema={cinemaRanges[cinemaPeriod] || overview?.cinema} period={cinemaPeriod} onPeriodChange={setCinemaPeriod} budget={budget?.cinema} cinemaRanges={cinemaRanges} />
+            <VenueMiniCard card={billiards} target={periodRevenue} period={billiardsPeriod} onPeriodChange={setBilliardsPeriod} budget={budget?.billiards} monthlyActual={xiaotieDetail?.summary_month?.revenue} annualActual={xiaotieDetail?.summary_year?.revenue} loading={detailLoading} />
+            <VenueMiniCard card={mahjong} target={periodRevenue} period={mahjongPeriod} onPeriodChange={setMahjongPeriod} budget={budget?.mahjong} monthlyActual={mahjongDetail?.summary_month?.revenue} annualActual={mahjongDetail?.summary_year?.revenue} loading={detailLoading} />
           </section>
 
           <section className="bottomGrid">
@@ -303,16 +332,46 @@ function CinemaPrimeCard({
   cinema,
   period,
   onPeriodChange,
+  budget,
+  cinemaRanges,
 }: {
   card: BusinessCard;
   cinema?: OverviewData["cinema"];
   period: PeriodKey;
   onPeriodChange: (value: PeriodKey) => void;
+  budget?: BudgetData["cinema"];
+  cinemaRanges?: Partial<Record<PeriodKey, CinemaOverview>>;
 }) {
   const concession = cinema?.concession_revenue || Math.round(card.revenue * 0.33);
   const ticket = cinema?.box_office || Math.max(card.revenue - concession, 0);
   const customers = card.customers || cinema?.customer_count || 0;
   const spp = customers ? concession / customers : 0;
+  
+  // 预算目标
+  const monthlyBoxTarget = budget?.monthly_box_office_target || 0;
+  const annualBoxTarget = budget?.annual_box_office_target || 0;
+  const monthlyConcTarget = budget?.monthly_concession_target || 0;
+  const annualConcTarget = budget?.annual_concession_target || 0;
+  
+  // 用实际聚合数据计算完成率
+  const monthData = cinemaRanges?.month;
+  const yearData = cinemaRanges?.year;
+  
+  // 月度完成率：用月度聚合数据
+  const monthlyBoxActual = monthData?.box_office || ticket;
+  const monthlyConcActual = monthData?.concession_revenue || concession;
+  const monthlyBoxRate = monthlyBoxTarget ? Math.min(100, Math.round((monthlyBoxActual / monthlyBoxTarget) * 100)) : 0;
+  const monthlyConcRate = monthlyConcTarget ? Math.min(100, Math.round((monthlyConcActual / monthlyConcTarget) * 100)) : 0;
+  
+  // 年度完成率：用年度聚合数据
+  const annualBoxActual = yearData?.box_office || ticket;
+  const annualConcActual = yearData?.concession_revenue || concession;
+  const annualBoxRate = annualBoxTarget ? Math.min(100, Math.round((annualBoxActual / annualBoxTarget) * 100)) : 0;
+  const annualConcRate = annualConcTarget ? Math.min(100, Math.round((annualConcActual / annualConcTarget) * 100)) : 0;
+  
+  // 根据时间选择器决定显示
+  const showMonthly = period !== "year";
+  const showAnnual = period !== "month";
   return (
     <section className="primeCard">
       <Link className="cardJump" href={card.href} aria-label={`查看${card.label}详情`} />
@@ -348,6 +407,22 @@ function CinemaPrimeCard({
           <div className="donut"><b>{percent(card.revenue ? concession / card.revenue : 0.327)}</b></div>
         </div>
       </div>
+      {budget && (
+        <div className="cinemaProgressRow">
+          {showMonthly && (
+            <div className="cinemaProgressItem">
+              <ProgressRow label="月度票房" value={monthlyBoxRate} note={`${currency(monthlyBoxActual)} / ${currency(monthlyBoxTarget)}`} color={monthlyBoxRate >= 100 ? "#22c55e" : monthlyBoxRate >= 80 ? "#586eff" : "#ef4444"} />
+              <ProgressRow label="月度卖品" value={monthlyConcRate} note={`${currency(monthlyConcActual)} / ${currency(monthlyConcTarget)}`} color={monthlyConcRate >= 100 ? "#22c55e" : monthlyConcRate >= 80 ? "#586eff" : "#ef4444"} />
+            </div>
+          )}
+          {showAnnual && (
+            <div className="cinemaProgressItem">
+              <ProgressRow label="年度票房" value={annualBoxRate} note={`${currency(annualBoxActual)} / ${currency(annualBoxTarget)}`} color={annualBoxRate >= 100 ? "#22c55e" : annualBoxRate >= 80 ? "#586eff" : "#ef4444"} />
+              <ProgressRow label="年度卖品" value={annualConcRate} note={`${currency(annualConcActual)} / ${currency(annualConcTarget)}`} color={annualConcRate >= 100 ? "#22c55e" : annualConcRate >= 80 ? "#586eff" : "#ef4444"} />
+            </div>
+          )}
+        </div>
+      )}
     </section>
   );
 }
@@ -368,14 +443,35 @@ function VenueMiniCard({
   target,
   period,
   onPeriodChange,
+  budget,
+  monthlyActual,
+  annualActual,
+  loading = false,
 }: {
   card: BusinessCard;
   target: number;
   period: PeriodKey;
   onPeriodChange: (value: PeriodKey) => void;
+  budget?: BudgetData["billiards"] | BudgetData["mahjong"];
+  monthlyActual?: number;
+  annualActual?: number;
+  loading?: boolean;
 }) {
   const utilization = Math.round((card.utilizationRate || 0) * 100);
   const revenueShare = target ? Math.min(100, Math.round((card.revenue / target) * 100)) : 0;
+  
+  // 预算目标
+  const monthlyTarget = budget?.monthly_target || 0;
+  const annualTarget = budget?.annual_target || 0;
+  
+  // 用实际数据计算完成率
+  const monthlyRate = monthlyTarget ? Math.min(100, Math.round(((monthlyActual || 0) / monthlyTarget) * 100)) : 0;
+  const annualRate = annualTarget ? Math.min(100, Math.round(((annualActual || 0) / annualTarget) * 100)) : 0;
+  
+  // 根据时间选择器决定显示
+  const showMonthly = period !== "year";
+  const showAnnual = period !== "month";
+  const noteText = loading ? "加载中..." : card.dataNote;
   return (
     <section className={`venueCard ${card.accent}`}>
       <Link className="cardJump" href={card.href} aria-label={`查看${card.label}详情`} />
@@ -387,14 +483,18 @@ function VenueMiniCard({
         <PeriodSelect value={period} onChange={onPeriodChange} />
       </div>
       <div className="venueMetrics">
-        <MiniMetric label="收入" value={currency(card.revenue)} note={card.dataNote} />
-        <MiniMetric label="人次/订单" value={formatNumber(card.customers || card.orders)} note={card.dataNote} />
-        <MiniMetric label="利用率" value={card.utilizationRate == null ? "-" : percent(card.utilizationRate)} note={card.dataNote} warn={utilization < 35} />
-        <MiniMetric label="客单价" value={`¥${(card.avgOrderValue || 0).toFixed(2)}`} note={card.dataNote} />
+        <MiniMetric label="收入" value={currency(card.revenue)} note={noteText} />
+        <MiniMetric label="人次/订单" value={formatNumber(card.customers || card.orders)} note={noteText} />
+        <MiniMetric label="利用率" value={card.utilizationRate == null ? "-" : percent(card.utilizationRate)} note={noteText} warn={utilization < 35} />
+        <MiniMetric label="客单价" value={`¥${(card.avgOrderValue || 0).toFixed(2)}`} note={noteText} />
         <MiniMetric label={card.label === "台球" ? "开台数" : "包间使用率"} value={card.capacityLabel} note="实时状态" />
       </div>
-      <ProgressRow label="利用率" value={utilization} note={card.capacityLabel} color={card.accent === "orange" ? "#ffad4d" : "#51bf72"} />
-      <ProgressRow label="收入占比" value={revenueShare} note={`总收入 ${currency(target)}`} color={card.accent === "orange" ? "#ffad4d" : "#51bf72"} />
+      {budget && showMonthly && (
+        <ProgressRow label="月度任务" value={monthlyRate} note={`${currency(monthlyActual || 0)} / ${currency(monthlyTarget)}`} color={monthlyRate >= 100 ? "#22c55e" : monthlyRate >= 80 ? "#586eff" : "#ef4444"} />
+      )}
+      {budget && showAnnual && (
+        <ProgressRow label="年度任务" value={annualRate} note={`${currency(annualActual || 0)} / ${currency(annualTarget)}`} color={annualRate >= 100 ? "#22c55e" : annualRate >= 80 ? "#586eff" : "#ef4444"} />
+      )}
     </section>
   );
 }
@@ -402,6 +502,7 @@ function VenueMiniCard({
 function PeriodSelect({ value, onChange }: { value: PeriodKey; onChange: (value: PeriodKey) => void }) {
   return (
     <select className="periodSelect" value={value} onChange={(event) => onChange(event.target.value as PeriodKey)} aria-label="切换时间范围">
+      <option value="yesterday">昨日</option>
       <option value="today">今日</option>
       <option value="month">本月</option>
       <option value="year">本年</option>
@@ -567,7 +668,7 @@ function MiniCurve({ color, flip = false }: { color: string; flip?: boolean }) {
 
 export function getBusinessCards(
   overview?: OverviewData,
-  period: PeriodKey = "today",
+  periods: { cinema: PeriodKey; billiards: PeriodKey; mahjong: PeriodKey } = { cinema: "today", billiards: "today", mahjong: "today" },
   details: {
     xiaotie?: XiaotieFullDetail | null;
     mahjong?: WuLaobanFullDetail | null;
@@ -582,12 +683,13 @@ export function getBusinessCards(
     ];
   }
   const [billiardsSummary, mahjongSummary, cinemaSummary] = toOverviewBusinessSummaries(overview);
-  const xiaotieSummary = xiaotiePeriodSummary(details.xiaotie, period);
-  const mahjongPeriod = mahjongPeriodSummary(details.mahjong, period);
-  const cinemaPeriod = details.cinemaRanges?.[period] || overview.cinema;
-  const cinemaRevenue = period === "today" ? cinemaSummary.revenue || overview.cinema?.revenue || 0 : cinemaPeriod?.revenue || 0;
-  const cinemaOrders = period === "today" ? cinemaSummary.orders || overview.cinema?.screenings || 0 : cinemaPeriod?.screenings || 0;
-  const cinemaCustomers = period === "today" ? cinemaSummary.customers || overview.cinema?.customer_count || 0 : cinemaPeriod?.customer_count || 0;
+  const xiaotieSummary = xiaotiePeriodSummary(details.xiaotie, periods.billiards);
+  const mahjongPeriodData = mahjongPeriodSummary(details.mahjong, periods.mahjong);
+  const cinemaPeriodData = details.cinemaRanges?.[periods.cinema] || overview.cinema;
+  const useOverview = periods.cinema === "today" || periods.cinema === "yesterday";
+  const cinemaRevenue = useOverview ? cinemaSummary.revenue || overview.cinema?.revenue || 0 : cinemaPeriodData?.revenue || 0;
+  const cinemaOrders = useOverview ? cinemaSummary.orders || overview.cinema?.screenings || 0 : cinemaPeriodData?.screenings || 0;
+  const cinemaCustomers = useOverview ? cinemaSummary.customers || overview.cinema?.customer_count || 0 : cinemaPeriodData?.customer_count || 0;
   return [
     {
       label: "影院",
@@ -595,10 +697,10 @@ export function getBusinessCards(
       revenue: cinemaRevenue,
       orders: cinemaOrders,
       customers: cinemaCustomers,
-      utilizationRate: period === "today" ? cinemaSummary.utilizationRate || overview.cinema?.occupancy_rate || 0 : cinemaPeriod?.occupancy_rate || 0,
-      avgOrderValue: period === "today" ? cinemaSummary.avgOrderValue || overview.cinema?.avg_order_value || 0 : cinemaPeriod?.avg_order_value || 0,
+      utilizationRate: useOverview ? cinemaSummary.utilizationRate || overview.cinema?.occupancy_rate || 0 : cinemaPeriodData?.occupancy_rate || 0,
+      avgOrderValue: useOverview ? cinemaSummary.avgOrderValue || overview.cinema?.avg_order_value || 0 : cinemaPeriodData?.avg_order_value || 0,
       capacityLabel: `${cinemaOrders} 场`,
-      dataNote: period === "today" ? "凤凰云智今日" : `凤凰云智${periodLabel(period)}`,
+      dataNote: periods.cinema === "today" ? "凤凰云智今日" : `凤凰云智${periodLabel(periods.cinema)}`,
       accent: "blue",
     },
     {
@@ -610,19 +712,19 @@ export function getBusinessCards(
       utilizationRate: billiardsSummary.utilizationRate,
       avgOrderValue: average(xiaotieSummary?.revenue ?? billiardsSummary.revenue, xiaotieSummary?.orders ?? billiardsSummary.orders),
       capacityLabel: details.xiaotie ? `${details.xiaotie.busy_count || 0} / ${details.xiaotie.total_count || 0}` : "-",
-      dataNote: details.xiaotie ? `小铁${periodLabel(period)}` : "小铁概览",
+      dataNote: details.xiaotie ? `小铁${periodLabel(periods.billiards)}` : "小铁概览",
       accent: "green",
     },
     {
       label: "棋牌",
       href: "/dashboard/mahjong",
-      revenue: mahjongPeriod?.revenue ?? mahjongSummary.revenue,
-      orders: mahjongPeriod?.orders ?? mahjongSummary.orders,
-      customers: mahjongPeriod?.customers ?? mahjongSummary.customers,
+      revenue: mahjongPeriodData?.revenue ?? mahjongSummary.revenue,
+      orders: mahjongPeriodData?.orders ?? mahjongSummary.orders,
+      customers: mahjongPeriodData?.customers ?? mahjongSummary.customers,
       utilizationRate: details.mahjong ? ratio(details.mahjong.active_orders, details.mahjong.total_rooms) : mahjongSummary.utilizationRate,
-      avgOrderValue: average(mahjongPeriod?.revenue ?? mahjongSummary.revenue, mahjongPeriod?.orders ?? mahjongSummary.orders),
+      avgOrderValue: average(mahjongPeriodData?.revenue ?? mahjongSummary.revenue, mahjongPeriodData?.orders ?? mahjongSummary.orders),
       capacityLabel: details.mahjong ? `${details.mahjong.active_orders || 0} / ${details.mahjong.total_rooms || 0}` : "-",
-      dataNote: details.mahjong ? `無老板${periodLabel(period)}` : "無老板概览",
+      dataNote: details.mahjong ? `無老板${periodLabel(periods.mahjong)}` : "無老板概览",
       accent: "orange",
     },
   ];
@@ -646,6 +748,7 @@ function emptyBusinessCard(label: string, href: string, accent: Accent): Busines
 function xiaotiePeriodSummary(detail: XiaotieFullDetail | null | undefined, period: PeriodKey) {
   if (!detail) return null;
   const summary = period === "year" ? detail.summary_year : period === "month" ? detail.summary_month : detail.summary_today;
+  if (!summary) return null;
   const record = summary as { revenue?: number; order_count?: number; face_count?: number; member_count?: number };
   return {
     revenue: Number(record.revenue || 0),
@@ -657,6 +760,7 @@ function xiaotiePeriodSummary(detail: XiaotieFullDetail | null | undefined, peri
 function mahjongPeriodSummary(detail: WuLaobanFullDetail | null | undefined, period: PeriodKey) {
   if (!detail) return null;
   const summary = period === "year" ? detail.summary_year : period === "month" ? detail.summary_month : detail.summary_today;
+  if (!summary) return null;
   return {
     revenue: Number(summary?.revenue || 0),
     orders: Number(summary?.order_count || 0),
@@ -804,7 +908,7 @@ function percent(value: number): string {
 }
 
 function periodLabel(period: PeriodKey): string {
-  return { today: "今日", month: "本月", year: "本年" }[period];
+  return { today: "今日", yesterday: "昨日", month: "本月", year: "本年" }[period];
 }
 
 function periodVendingAmount(period: PeriodKey, detail?: XiaotieFullDetail | null): number {
@@ -1374,6 +1478,54 @@ function DashboardStyles() {
         color: #5a6784;
         font-size: 15px;
         font-weight: 900;
+      }
+      .completionRow {
+        display: flex;
+        gap: 16px;
+        margin-top: 12px;
+        padding-top: 12px;
+        border-top: 1px solid rgba(0,0,0,0.06);
+      }
+      .completionRow.compact {
+        margin-top: 8px;
+        padding-top: 8px;
+      }
+      .completionItem {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+      .completionItem span {
+        font-size: 11px;
+        color: #8a94ad;
+      }
+      .completionItem strong {
+        font-size: 18px;
+        font-weight: 800;
+        color: #101625;
+      }
+      .completionItem strong.positive {
+        color: #22c55e;
+      }
+      .completionItem strong.warn {
+        color: #ef4444;
+      }
+      .completionItem small {
+        font-size: 10px;
+        color: #8a94ad;
+      }
+      .cinemaProgressRow {
+        margin-top: 12px;
+        padding-top: 12px;
+        border-top: 1px solid rgba(0,0,0,0.06);
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 16px;
+      }
+      .cinemaProgressItem {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
       }
       .miniCurves {
         display: grid;

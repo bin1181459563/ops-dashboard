@@ -5,6 +5,7 @@ import { getDashboardErrorMessage } from "../../components/dashboard/DashboardSt
 import { toBilliardsSummary } from "../../lib/businessAdapters";
 import { fetchXiaotieFullDetail, runCollect } from "../../lib/dashboardApi";
 import type { XiaotieFullDetail } from "../../lib/dashboardApi";
+import { AppShell, PageHeader } from "../../components/dashboard";
 
 // Tab类型：今日/昨日/本周/上周/本月/上月/今年/去年
 type TabKey = "today" | "yesterday" | "week" | "last_week" | "month" | "last_month" | "year" | "last_year" | "all";
@@ -159,23 +160,24 @@ export default function BilliardsPage() {
   return (
     <>
       <Head><title>台球详情 - 翡翠城经营驾驶舱</title></Head>
-      <main className="dashboardShell">
-        {/* 顶栏 */}
-        <div className="topBar">
-          <div>
-            <Link href="/" className="backLink">← 返回驾驶舱</Link>
-            <h1>🎱 台球详情</h1>
-            <Link href="/dashboard/customer?platform=billiards" className="backLink" style={{ marginLeft: 12 }}>👥 客户分析</Link>
-          </div>
-          <div className="topMeta">
-            {lastUpdate && <span className="clock">{lastUpdate.toLocaleTimeString("zh-CN")}</span>}
-            <button className="refreshButton" onClick={refresh} disabled={loading}>
-              {loading ? "加载中..." : "手动刷新"}
-            </button>
-          </div>
-        </div>
+      <AppShell currentPage="/dashboard/billiards">
+        {/* 页面头部 */}
+        <PageHeader
+          title="🎱 台球详情"
+          description={lastUpdate ? `最后更新：${lastUpdate.toLocaleTimeString("zh-CN")}` : undefined}
+          actions={
+            <>
+              <Link href="/dashboard/customer?platform=billiards" className="btn btnSecondary">
+                👥 客户分析
+              </Link>
+              <button className="btn btnSecondary" onClick={refresh} disabled={loading}>
+                {loading ? "加载中..." : "手动刷新"}
+              </button>
+            </>
+          }
+        />
 
-        {error && <div className="errorBanner">{error}</div>}
+        {error && <div className="errorState"><div className="errorIcon">⚠️</div><div className="errorTitle">{error}</div></div>}
 
         {data && (
           <>
@@ -603,174 +605,174 @@ export default function BilliardsPage() {
         )}
 
         {!data && !error && !loading && <div className="emptyState">点击"手动刷新"加载数据</div>}
-      </main>
 
-      <style jsx>{`
-        .backLink {
-          display: inline-block;
-          margin-bottom: 4px;
-          color: var(--cyan);
-          font-size: 13px;
-          text-decoration: none;
-        }
-        .backLink:hover { text-decoration: underline; }
-        .errorBanner {
-          padding: 12px 16px;
-          margin-bottom: 12px;
-          background: rgba(255,107,107,0.15);
-          border: 1px solid rgba(255,107,107,0.3);
-          border-radius: 8px;
-          color: #ffb3b3;
-        }
-        .rankingTable {
-          width: 100%;
-          border-collapse: collapse;
-        }
-        .rankingTable th, .rankingTable td {
-          padding: 8px 12px;
-          text-align: left;
-          border-bottom: 1px solid rgba(122,166,184,0.12);
-          font-size: 13px;
-        }
-        .rankingTable th {
-          color: var(--muted);
-          font-weight: 500;
-          font-size: 12px;
-        }
-        .rankingTable tr:hover td {
-          background: rgba(54,214,255,0.05);
-        }
-        /* 时段柱状图 */
-        .hourlyChart {
-          display: flex;
-          align-items: flex-end;
-          gap: 4px;
-          height: 120px;
-          padding-top: 8px;
-        }
-        .hourlyBar {
-          flex: 1;
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          position: relative;
-          height: 100%;
-          justify-content: flex-end;
-        }
-        .hourlyBarFill {
-          width: 100%;
-          max-width: 28px;
-          background: linear-gradient(180deg, var(--cyan), rgba(54,214,255,0.3));
-          border-radius: 3px 3px 0 0;
-          min-height: 2px;
-          transition: height 0.3s;
-        }
-        .hourlyLabel {
-          font-size: 10px;
-          color: var(--muted);
-          margin-top: 4px;
-        }
-        .hourlyValue {
-          font-size: 9px;
-          color: var(--cyan);
-          position: absolute;
-          top: -2px;
-        }
-        /* 评论 */
-        .commentList { display: grid; gap: 8px; }
-        .commentItem {
-          padding: 10px 12px;
-          border: 1px solid rgba(122,166,184,0.16);
-          border-radius: 8px;
-          background: rgba(5,13,17,0.45);
-        }
-        .comment-bad {
-          border-color: rgba(255,107,107,0.3);
-          background: rgba(255,107,107,0.06);
-        }
-        .commentMeta {
-          display: flex;
-          gap: 12px;
-          font-size: 12px;
-          color: var(--muted);
-          margin-bottom: 6px;
-          align-items: center;
-        }
-        .commentMeta time {
-          margin-left: auto;
-        }
-        .commentTag {
-          background: rgba(255,107,107,0.15);
-          color: #ffb3b3;
-          padding: 1px 6px;
-          border-radius: 4px;
-          font-size: 11px;
-        }
-        .commentContent {
-          font-size: 14px;
-          line-height: 1.5;
-        }
-        /* 统计卡片样式 - 参考小铁后台 */
-        .statsGrid {
-          display: grid;
-          grid-template-columns: 1fr 1fr;
-          gap: 12px;
-          margin-bottom: 12px;
-        }
-        .statCard {
-          background: rgba(54, 214, 255, 0.05);
-          border: 1px solid rgba(54, 214, 255, 0.15);
-          border-radius: 8px;
-          padding: 16px;
-          text-align: center;
-        }
-        .statLabel {
-          font-size: 12px;
-          color: var(--muted);
-          margin-bottom: 8px;
-        }
-        .statValue {
-          font-size: 24px;
-          font-weight: 600;
-          color: var(--cyan);
-        }
-        /* 环比条 */
-        .comparisonBar {
-          display: flex;
-          justify-content: space-around;
-          padding: 12px;
-          background: rgba(0,0,0,0.2);
-          border-radius: 8px;
-          font-size: 12px;
-          color: var(--muted);
-          margin-bottom: 12px;
-        }
-        .change-up {
-          color: var(--green);
-          font-weight: 500;
-        }
-        .change-down {
-          color: var(--red);
-          font-weight: 500;
-        }
-        .change-flat {
-          color: var(--muted);
-        }
-        /* 球桌状态 */
-        .tableStatus {
-          display: flex;
-          align-items: center;
-          gap: 8px;
-          padding: 12px;
-          background: rgba(0,0,0,0.2);
-          border-radius: 8px;
-          font-size: 14px;
-        }
-        .tableStatus strong {
-          color: var(--cyan);
-          font-size: 18px;
-        }
-      `}</style>
+        <style jsx>{`
+          .backLink {
+            display: inline-block;
+            margin-bottom: 4px;
+            color: var(--cyan);
+            font-size: 13px;
+            text-decoration: none;
+          }
+          .backLink:hover { text-decoration: underline; }
+          .errorBanner {
+            padding: 12px 16px;
+            margin-bottom: 12px;
+            background: rgba(255,107,107,0.15);
+            border: 1px solid rgba(255,107,107,0.3);
+            border-radius: 8px;
+            color: #ffb3b3;
+          }
+          .rankingTable {
+            width: 100%;
+            border-collapse: collapse;
+          }
+          .rankingTable th, .rankingTable td {
+            padding: 8px 12px;
+            text-align: left;
+            border-bottom: 1px solid rgba(122,166,184,0.12);
+            font-size: 13px;
+          }
+          .rankingTable th {
+            color: var(--muted);
+            font-weight: 500;
+            font-size: 12px;
+          }
+          .rankingTable tr:hover td {
+            background: rgba(54,214,255,0.05);
+          }
+          /* 时段柱状图 */
+          .hourlyChart {
+            display: flex;
+            align-items: flex-end;
+            gap: 4px;
+            height: 120px;
+            padding-top: 8px;
+          }
+          .hourlyBar {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            position: relative;
+            height: 100%;
+            justify-content: flex-end;
+          }
+          .hourlyBarFill {
+            width: 100%;
+            max-width: 28px;
+            background: linear-gradient(180deg, var(--cyan), rgba(54,214,255,0.3));
+            border-radius: 3px 3px 0 0;
+            min-height: 2px;
+            transition: height 0.3s;
+          }
+          .hourlyLabel {
+            font-size: 10px;
+            color: var(--muted);
+            margin-top: 4px;
+          }
+          .hourlyValue {
+            font-size: 9px;
+            color: var(--cyan);
+            position: absolute;
+            top: -2px;
+          }
+          /* 评论 */
+          .commentList { display: grid; gap: 8px; }
+          .commentItem {
+            padding: 10px 12px;
+            border: 1px solid rgba(122,166,184,0.16);
+            border-radius: 8px;
+            background: rgba(5,13,17,0.45);
+          }
+          .comment-bad {
+            border-color: rgba(255,107,107,0.3);
+            background: rgba(255,107,107,0.06);
+          }
+          .commentMeta {
+            display: flex;
+            gap: 12px;
+            font-size: 12px;
+            color: var(--muted);
+            margin-bottom: 6px;
+            align-items: center;
+          }
+          .commentMeta time {
+            margin-left: auto;
+          }
+          .commentTag {
+            background: rgba(255,107,107,0.15);
+            color: #ffb3b3;
+            padding: 1px 6px;
+            border-radius: 4px;
+            font-size: 11px;
+          }
+          .commentContent {
+            font-size: 14px;
+            line-height: 1.5;
+          }
+          /* 统计卡片样式 - 参考小铁后台 */
+          .statsGrid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+            margin-bottom: 12px;
+          }
+          .statCard {
+            background: rgba(54, 214, 255, 0.05);
+            border: 1px solid rgba(54, 214, 255, 0.15);
+            border-radius: 8px;
+            padding: 16px;
+            text-align: center;
+          }
+          .statLabel {
+            font-size: 12px;
+            color: var(--muted);
+            margin-bottom: 8px;
+          }
+          .statValue {
+            font-size: 24px;
+            font-weight: 600;
+            color: var(--cyan);
+          }
+          /* 环比条 */
+          .comparisonBar {
+            display: flex;
+            justify-content: space-around;
+            padding: 12px;
+            background: rgba(0,0,0,0.2);
+            border-radius: 8px;
+            font-size: 12px;
+            color: var(--muted);
+            margin-bottom: 12px;
+          }
+          .change-up {
+            color: var(--green);
+            font-weight: 500;
+          }
+          .change-down {
+            color: var(--red);
+            font-weight: 500;
+          }
+          .change-flat {
+            color: var(--muted);
+          }
+          /* 球桌状态 */
+          .tableStatus {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 12px;
+            background: rgba(0,0,0,0.2);
+            border-radius: 8px;
+            font-size: 14px;
+          }
+          .tableStatus strong {
+            color: var(--cyan);
+            font-size: 18px;
+          }
+        `}</style>
+      </AppShell>
     </>
   );
 }

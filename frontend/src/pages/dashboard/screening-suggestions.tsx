@@ -1,4 +1,5 @@
 import Head from "next/head";
+import { AppShell, PageHeader } from "../../components/dashboard";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { DashboardStatePanel, getDashboardErrorMessage } from "../../components/dashboard/DashboardStatePanel";
@@ -30,7 +31,7 @@ export default function ScreeningSuggestionsPage() {
   return (
     <>
       <Head><title>🎬 排片建议 - 翡翠城经营驾驶舱</title></Head>
-      <main className="dashboardShell">
+      <AppShell currentPage="/dashboard/screening-suggestions">
         <div className="topBar">
           <div>
             <Link href="/dashboard" className="backLink">← 返回驾驶舱</Link>
@@ -214,7 +215,7 @@ export default function ScreeningSuggestionsPage() {
             compact
           />
         ) : null}
-      </main>
+      </AppShell>
 
       <style jsx>{`
         .errorBanner {

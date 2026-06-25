@@ -1,8 +1,10 @@
 import Head from "next/head";
+import { AppShell, PageHeader } from "../../components/dashboard";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { fetchConcessionDetail } from "../../lib/dashboardApi";
 import type { ConcessionDetail } from "../../lib/dashboardApi";
+import InventoryAlert from "../../components/InventoryAlert";
 
 type TabKey = "today" | "week" | "month";
 
@@ -59,7 +61,7 @@ export default function ConcessionPage() {
   return (
     <>
       <Head><title>卖品详情 - 翡翠城经营驾驶舱</title></Head>
-      <main className="dashboardShell">
+      <AppShell currentPage="/dashboard/concession">
         {/* 顶栏 */}
         <div className="topBar">
           <div>
@@ -208,7 +210,10 @@ export default function ConcessionPage() {
         )}
 
         {!data && !error && !loading && <div className="emptyState">点击"手动刷新"加载数据</div>}
-      </main>
+
+        {/* 库存预警 */}
+        <InventoryAlert className="panel" />
+      </AppShell>
 
       <style jsx>{`
         .backLink {

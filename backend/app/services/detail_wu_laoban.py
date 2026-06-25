@@ -663,7 +663,7 @@ def get_wu_laoban_full_detail() -> dict | None:
             "year": build_order_stats("year"),
         }
 
-        return {
+        result = {
             "status": "ok",
             "generated_at": datetime.now().isoformat(),
             # 包间实时状态
@@ -703,6 +703,8 @@ def get_wu_laoban_full_detail() -> dict | None:
             "today_new_users": today_new_user_count,
             "today_active_orders": active_orders,
         }
+        
+        return result
 
     except Exception as e:
         print(f"[wu_laoban_full_detail] 获取失败: {e}")

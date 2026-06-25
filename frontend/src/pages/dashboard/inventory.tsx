@@ -1,4 +1,5 @@
 import Head from "next/head";
+import { AppShell, PageHeader } from "../../components/dashboard";
 import Link from "next/link";
 import { ChangeEvent, useCallback, useEffect, useState } from "react";
 import {
@@ -6,6 +7,7 @@ import {
   importFinanceBatch,
 } from "../../lib/dashboardApi";
 import type { FinanceImportResult, InventoryOverview, MovementItem } from "../../lib/dashboardApi";
+import InventoryAlert from "../../components/InventoryAlert";
 
 export default function InventoryPage() {
   const [data, setData] = useState<InventoryOverview | null>(null);
@@ -62,7 +64,7 @@ export default function InventoryPage() {
   return (
     <>
       <Head><title>库存与损耗 - 翡翠城经营驾驶舱</title></Head>
-      <main className="dashboardShell">
+      <AppShell currentPage="/dashboard/inventory">
         <div className="topBar">
           <div>
             <Link href="/dashboard/cinema" className="backLink">← 返回影院</Link>
@@ -284,7 +286,10 @@ export default function InventoryPage() {
             )}
           </>
         )}
-      </main>
+
+        {/* 库存预警（前台+大仓） */}
+        {data?.status === "ok" && <InventoryAlert className="mt-6" />}
+      </AppShell>
     </>
   );
 }

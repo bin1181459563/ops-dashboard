@@ -1,4 +1,5 @@
 import Head from "next/head";
+import { AppShell, PageHeader } from "../../components/dashboard";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { fetchEmployeeCoach } from "../../lib/dashboardApi";
@@ -137,7 +138,7 @@ export default function EmployeeCoachPage() {
   return (
     <>
       <Head><title>🧑‍🏫 员工AI教练 - 翡翠城经营驾驶舱</title></Head>
-      <main className="dashboardShell">
+      <AppShell currentPage="/dashboard/employee-coach">
         <div className="topBar">
           <div>
             <Link href="/dashboard" className="backLink">← 返回驾驶舱</Link>
@@ -510,7 +511,7 @@ export default function EmployeeCoachPage() {
         )}
 
         {!data && !error && !loading && <div className="emptyState">加载中...</div>}
-      </main>
+      </AppShell>
 
       <style jsx>{`
         .errorBanner {

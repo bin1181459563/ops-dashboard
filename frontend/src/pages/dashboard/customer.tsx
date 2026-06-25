@@ -1,4 +1,5 @@
 import Head from "next/head";
+import { AppShell, PageHeader } from "../../components/dashboard";
 import Link from "next/link";
 import { useRouter } from "next/router";
 import { useCallback, useEffect, useState } from "react";
@@ -100,7 +101,7 @@ export default function CustomerPage() {
   return (
     <>
       <Head><title>{config.icon} {config.label}客户分析 - 翡翠城经营驾驶舱</title></Head>
-      <main className="dashboardShell">
+      <AppShell currentPage="/dashboard/customer">
         <div className="topBar">
           <div>
             <Link href="/dashboard" className="backLink">← 返回驾驶舱</Link>
@@ -306,7 +307,7 @@ export default function CustomerPage() {
             compact
           />
         )}
-      </main>
+      </AppShell>
 
       <style jsx>{`
         .tierGrid {

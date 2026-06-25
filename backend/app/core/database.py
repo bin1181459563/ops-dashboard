@@ -155,6 +155,18 @@ class DashboardRepository:
                 ON audit_logs (actor, created_at);
                 CREATE INDEX IF NOT EXISTS idx_audit_logs_action_created
                 ON audit_logs (action, created_at);
+                CREATE TABLE IF NOT EXISTS box_office (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    date TEXT NOT NULL,
+                    total_box REAL NOT NULL,
+                    market_share REAL,
+                    source TEXT NOT NULL DEFAULT 'manual',
+                    movies_json TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_box_office_date
+                ON box_office (date);
                 """
             )
             self._ensure_column(conn, "sync_logs", "business_type", "TEXT")
@@ -521,6 +533,60 @@ class DashboardRepository:
             with self.connect() as conn:
                 rows = conn.execute(query, (limit,)).fetchall()
         return [dict(row) for row in rows]
+
+    # ============================================================
+    # Box Office 大盘票房数据（持久化存储）
+    # ============================================================
+
+    def upsert_box_office(self, date: str, total_box: float, market_share: float = None, source: str = "manual", movies: list = None) -> dict:
+        """插入或更新大盘票房数据"""
+        import json
+        now = datetime.now().isoformat()
+        movies_json = json.dumps(movies, ensure_ascii=False) if movies else None
+        with self.connect() as conn:
+            conn.execute("""
+                INSERT INTO box_office (date, total_box, market_share, source, movies_json, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(date) DO UPDATE SET
+                    total_box = excluded.total_box,
+                    market_share = COALESCE(excluded.market_share, box_office.market_share),
+                    source = excluded.source,
+                    movies_json = COALESCE(excluded.movies_json, box_office.movies_json),
+                    updated_at = excluded.updated_at
+            """, (date, total_box, market_share, source, movies_json, now, now))
+        return {"status": "ok", "date": date, "total_box": total_box}
+
+    def get_box_office(self, date: str = None, days: int = 90) -> list[dict]:
+        """获取大盘票房数据"""
+        with self.connect() as conn:
+            if date:
+                row = conn.execute("SELECT * FROM box_office WHERE date = ?", (date,)).fetchone()
+                return [dict(row)] if row else []
+            else:
+                cutoff = (datetime.now().date() - timedelta(days=days)).isoformat()
+                rows = conn.execute("SELECT * FROM box_office WHERE date >= ? ORDER BY date ASC", (cutoff,)).fetchall()
+                return [dict(row) for row in rows]
+
+    def get_box_office_dict(self, days: int = 90) -> dict[str, dict]:
+        """获取大盘票房数据，返回 {date: {total_box, ...}} 格式"""
+        data = self.get_box_office(days=days)
+        result = {}
+        for row in data:
+            import json
+            movies = json.loads(row.get("movies_json", "[]")) if row.get("movies_json") else []
+            result[row["date"]] = {
+                "total_box": row["total_box"],
+                "market_share": row.get("market_share"),
+                "source": row.get("source", "manual"),
+                "movies": movies
+            }
+        return result
+
+    def update_market_share(self, date: str, market_share: float) -> None:
+        """更新某天的市占率"""
+        with self.connect() as conn:
+            conn.execute("UPDATE box_office SET market_share = ?, updated_at = ? WHERE date = ?",
+                        (market_share, datetime.now().isoformat(), date))
 
     def latest_metric_for_platform(self, platform: str) -> UnifiedMetric | None:
         query = """

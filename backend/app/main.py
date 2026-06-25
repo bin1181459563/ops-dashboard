@@ -3,7 +3,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import ai_report, alerts, automation, cinema, collect, concession, concession_recommendations, customer, customer_wake_up, data_sources, detail, employee, employee_coach, finance, member, overview, realtime, screening_suggestions, sync_logs, trend, data_quality, ai_insights, audit
+from app.api.routes import ai_report, alerts, automation, budget, cinema, collect, concession, concession_recommendations, customer, customer_wake_up, data_sources, detail, employee, employee_coach, finance, inventory_alert, member, overview, realtime, quick_stats, screening_suggestions, sync_logs, trend, data_quality, ai_insights, audit
 from app.core.config import settings
 from app.core.database import DashboardRepository
 from app.core.scheduler import create_scheduler
@@ -14,7 +14,7 @@ def create_app(db_path: str | Path | None = None, start_scheduler: bool = True) 
     app = FastAPI(title="Ops Dashboard MVP")
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["http://localhost:3000", "http://127.0.0.1:3000", "http://localhost:9100", "http://127.0.0.1:9100"],
+        allow_origins=["*"],  # 允许所有来源，支持局域网访问
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -51,6 +51,9 @@ def create_app(db_path: str | Path | None = None, start_scheduler: bool = True) 
     app.include_router(concession_recommendations.router, prefix="/api")
     app.include_router(finance.router, prefix="/api")
     app.include_router(member.router, prefix="/api")
+    app.include_router(inventory_alert.router, prefix="/api")
+    app.include_router(budget.router, prefix="/api")
+    app.include_router(quick_stats.router, prefix="/api")
 
     @app.get("/health")
     def health() -> dict[str, str]:

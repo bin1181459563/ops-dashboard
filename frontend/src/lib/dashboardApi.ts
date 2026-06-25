@@ -2,7 +2,25 @@ import axios from "axios";
 import { unwrapApiArray, unwrapApiData, unwrapApiObject } from "./apiEnvelope";
 import type { AiAnomaly, AlertItem, ApiEnvelope, CinemaOverview, CollectHistoryRun, CollectRunResult, DailyReport, DataSourcesStatus, DataQualitySummary, MockDashboardPayload, OrderSnapshot, OverviewData } from "../types/dashboard";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
+// 动态获取API基础地址（支持局域网访问）
+// 注意：必须在运行时获取，不能在build时静态计算
+let _cachedApiBase: string | null = null;
+function getApiBase(): string {
+  // 如果有环境变量，直接用
+  const envBase = process.env.NEXT_PUBLIC_API_BASE_URL;
+  if (envBase) return envBase;
+  
+  // 如果在浏览器端，用当前hostname
+  if (typeof window !== "undefined") {
+    if (!_cachedApiBase) {
+      _cachedApiBase = `${window.location.protocol}//${window.location.hostname}:8000`;
+    }
+    return _cachedApiBase;
+  }
+  
+  // SSR fallback
+  return "http://localhost:8000";
+}
 export const DATA_MODE = (process.env.NEXT_PUBLIC_DATA_MODE || "mock") as "mock" | "api";
 
 let mockCache: MockDashboardPayload | null = null;
@@ -15,7 +33,7 @@ async function getMock(): Promise<MockDashboardPayload> {
 }
 
 async function getApi<T>(path: string): Promise<ApiEnvelope<T>> {
-  const response = await axios.get<ApiEnvelope<T>>(`${API_BASE_URL}${path}`);
+  const response = await axios.get<ApiEnvelope<T>>(`${getApiBase()}${path}`);
   return response.data;
 }
 
@@ -127,7 +145,7 @@ export interface AiChatAnswer {
 }
 
 export async function askAiAssistant(question: string): Promise<ApiEnvelope<AiChatAnswer>> {
-  const response = await axios.post<ApiEnvelope<AiChatAnswer>>(`${API_BASE_URL}/api/ai/chat`, { question });
+  const response = await axios.post<ApiEnvelope<AiChatAnswer>>(`${getApiBase()}/api/ai/chat`, { question });
   return response.data;
 }
 
@@ -148,7 +166,7 @@ export interface AutomationTask {
 }
 
 export async function createAutomationTask(payload: { task_type: string; title: string; venue: string; prompt?: string }): Promise<ApiEnvelope<AutomationTask>> {
-  const response = await axios.post<ApiEnvelope<AutomationTask>>(`${API_BASE_URL}/api/automation/tasks`, payload);
+  const response = await axios.post<ApiEnvelope<AutomationTask>>(`${getApiBase()}/api/automation/tasks`, payload);
   return response.data;
 }
 
@@ -226,7 +244,7 @@ export async function fetchDataQualitySummary(): Promise<ApiEnvelope<DataQuality
     };
   }
   
-  const response = await axios.get<any>(`${API_BASE_URL}/api/data-quality/summary`);
+  const response = await axios.get<any>(`${getApiBase()}/api/data-quality/summary`);
   const apiData = unwrapApiObject(response.data, { sources: [], overall_status: "error" as const });
   return {
     data: {
@@ -393,7 +411,7 @@ export async function fetchCinemaOverview(date?: string, days: number = 1, start
   params.set("days", String(days));
   if (startDate) params.set("start_date", startDate);
   const suffix = params.toString() ? `?${params}` : "";
-  const response = await axios.get<CinemaOverview>(`${API_BASE_URL}/api/cinema/overview${suffix}`);
+  const response = await axios.get<CinemaOverview>(`${getApiBase()}/api/cinema/overview${suffix}`);
   return unwrapApiObject(response.data, response.data);
 }
 
@@ -402,7 +420,7 @@ export async function fetchCinemaDetail(date?: string, days: number = 30, startD
   if (date) params.set("date", date);
   params.set("days", String(days));
   if (startDate) params.set("start_date", startDate);
-  const response = await axios.get<CinemaDetail>(`${API_BASE_URL}/api/cinema/detail?${params}`);
+  const response = await axios.get<CinemaDetail>(`${getApiBase()}/api/cinema/detail?${params}`);
   return unwrapApiObject(response.data, response.data);
 }
 
@@ -420,7 +438,7 @@ export async function fetchConcessionDetail(date?: string, days: number = 30, ca
   if (date) params.set("date", date);
   params.set("days", String(days));
   if (category) params.set("category", category);
-  const response = await axios.get<ConcessionDetail>(`${API_BASE_URL}/api/cinema/concession?${params}`);
+  const response = await axios.get<ConcessionDetail>(`${getApiBase()}/api/cinema/concession?${params}`);
   return unwrapApiObject(response.data, response.data);
 }
 
@@ -439,21 +457,21 @@ export async function fetchMemberDetail(date?: string, days: number = 30, catego
   if (date) params.set("date", date);
   params.set("days", String(days));
   if (category) params.set("category", category);
-  const response = await axios.get<MemberDetail>(`${API_BASE_URL}/api/cinema/member?${params}`);
+  const response = await axios.get<MemberDetail>(`${getApiBase()}/api/cinema/member?${params}`);
   return unwrapApiObject(response.data, response.data);
 }
 
 export async function importCinemaExcel(file: File): Promise<CinemaImportResult> {
   const formData = new FormData();
   formData.append("file", file);
-  const response = await axios.post<CinemaImportResult>(`${API_BASE_URL}/api/cinema/import-excel`, formData);
+  const response = await axios.post<CinemaImportResult>(`${getApiBase()}/api/cinema/import-excel`, formData);
   return response.data;
 }
 
 export async function importCinemaBatch(files: File[]): Promise<CinemaBatchImportResult> {
   const formData = new FormData();
   files.forEach((file) => formData.append("files", file));
-  const response = await axios.post<CinemaBatchImportResult>(`${API_BASE_URL}/api/cinema/import-batch`, formData);
+  const response = await axios.post<CinemaBatchImportResult>(`${getApiBase()}/api/cinema/import-batch`, formData);
   return response.data;
 }
 
@@ -514,7 +532,7 @@ export interface ConsumptionTrendData {
 }
 
 export async function fetchCustomerRfm(platform: string = "mahjong", days: number = 90): Promise<RfmData> {
-  const response = await axios.get<RfmData>(`${API_BASE_URL}/api/customer/rfm?platform=${platform}&days=${days}`);
+  const response = await axios.get<RfmData>(`${getApiBase()}/api/customer/rfm?platform=${platform}&days=${days}`);
   const data = unwrapApiObject(response.data, { status: "ok", platform, period_days: days, total_users: 0, tier_stats: {}, top_users: [] });
   return {
     ...data,
@@ -524,7 +542,7 @@ export async function fetchCustomerRfm(platform: string = "mahjong", days: numbe
 }
 
 export async function fetchRepurchase(months: number = 6): Promise<RepurchaseData> {
-  const response = await axios.get<RepurchaseData>(`${API_BASE_URL}/api/customer/repurchase?months=${months}`);
+  const response = await axios.get<RepurchaseData>(`${getApiBase()}/api/customer/repurchase?months=${months}`);
   const data = unwrapApiObject(response.data, { status: "ok", platform: "mahjong", cohorts: [] });
   return {
     ...data,
@@ -533,7 +551,7 @@ export async function fetchRepurchase(months: number = 6): Promise<RepurchaseDat
 }
 
 export async function fetchConsumptionTrend(): Promise<ConsumptionTrendData> {
-  const response = await axios.get<ConsumptionTrendData>(`${API_BASE_URL}/api/customer/trend`);
+  const response = await axios.get<ConsumptionTrendData>(`${getApiBase()}/api/customer/trend`);
   const data = unwrapApiObject(response.data, { status: "ok", platform: "mahjong", this_month: "", last_month: "", trend_summary: {}, total_compared: 0, details: [] });
   return {
     ...data,
@@ -543,17 +561,17 @@ export async function fetchConsumptionTrend(): Promise<ConsumptionTrendData> {
 }
 
 export async function runCollect(): Promise<ApiEnvelope<CollectRunResult>> {
-  const response = await axios.post<ApiEnvelope<CollectRunResult>>(`${API_BASE_URL}/api/collect/run`);
+  const response = await axios.post<ApiEnvelope<CollectRunResult>>(`${getApiBase()}/api/collect/run`);
   return response.data;
 }
 
 export async function fetchCollectHistory(limit: number = 5): Promise<ApiEnvelope<CollectHistoryRun[]>> {
-  const response = await axios.get<ApiEnvelope<CollectHistoryRun[]>>(`${API_BASE_URL}/api/collect/history?limit=${limit}`);
+  const response = await axios.get<ApiEnvelope<CollectHistoryRun[]>>(`${getApiBase()}/api/collect/history?limit=${limit}`);
   return response.data;
 }
 
 export async function updateXiaotieToken(token: string): Promise<{ success: boolean; message: string }> {
-  const response = await axios.post<{ success: boolean; message: string }>(`${API_BASE_URL}/api/token/xiaotie/update`, { token });
+  const response = await axios.post<{ success: boolean; message: string }>(`${getApiBase()}/api/token/xiaotie/update`, { token });
   return response.data;
 }
 
@@ -570,7 +588,7 @@ export interface TokenStatusResponse {
 }
 
 export async function fetchTokenStatus(): Promise<TokenStatusResponse> {
-  const response = await axios.get<TokenStatusResponse>(`${API_BASE_URL}/api/token-status`);
+  const response = await axios.get<TokenStatusResponse>(`${getApiBase()}/api/token-status`);
   return response.data;
 }
 
@@ -588,7 +606,7 @@ export async function fetchRevenueTrend(platform?: string, days: number = 7): Pr
   const params = new URLSearchParams();
   if (platform) params.append("platform", platform);
   params.append("days", days.toString());
-  const response = await axios.get<TrendResponse>(`${API_BASE_URL}/api/trend/revenue?${params}`);
+  const response = await axios.get<TrendResponse>(`${getApiBase()}/api/trend/revenue?${params}`);
   return response.data;
 }
 
@@ -596,7 +614,7 @@ export async function fetchOrdersTrend(platform?: string, days: number = 7): Pro
   const params = new URLSearchParams();
   if (platform) params.append("platform", platform);
   params.append("days", days.toString());
-  const response = await axios.get<TrendResponse>(`${API_BASE_URL}/api/trend/orders?${params}`);
+  const response = await axios.get<TrendResponse>(`${getApiBase()}/api/trend/orders?${params}`);
   return response.data;
 }
 
@@ -614,7 +632,7 @@ export async function fetchHourlyRevenue(platform: string, date?: string): Promi
   const params = new URLSearchParams();
   params.append("platform", platform);
   if (date) params.append("date", date);
-  const response = await axios.get<HourlyResponse>(`${API_BASE_URL}/api/trend/hourly?${params}`);
+  const response = await axios.get<HourlyResponse>(`${getApiBase()}/api/trend/hourly?${params}`);
   return response.data;
 }
 
@@ -814,7 +832,7 @@ export interface XiaotieFullDetail {
 }
 
 export async function fetchXiaotieFullDetail(): Promise<XiaotieFullDetail> {
-  const response = await axios.get<XiaotieFullDetail>(`${API_BASE_URL}/api/detail/xiaotie`);
+  const response = await axios.get<XiaotieFullDetail>(`${getApiBase()}/api/detail/xiaotie`);
   return unwrapApiObject(response.data, response.data);
 }
 
@@ -929,7 +947,7 @@ export interface WuLaobanFullDetail {
 }
 
 export async function fetchWuLaobanFullDetail(): Promise<WuLaobanFullDetail> {
-  const response = await axios.get<WuLaobanFullDetail>(`${API_BASE_URL}/api/detail/wu_laoban`);
+  const response = await axios.get<WuLaobanFullDetail>(`${getApiBase()}/api/detail/wu_laoban`);
   return unwrapApiObject(response.data, response.data);
 }
 
@@ -1009,7 +1027,7 @@ export interface CustomerWakeUpData {
 }
 
 export async function fetchCustomerWakeUp(): Promise<CustomerWakeUpData> {
-  const response = await axios.get<CustomerWakeUpData>(`${API_BASE_URL}/api/customer/wake-up`);
+  const response = await axios.get<CustomerWakeUpData>(`${getApiBase()}/api/customer/wake-up`);
   const data = unwrapApiObject(response.data, { status: "ok", summary: { total_customers: 0, vip_count: 0, normal_count: 0, dormant_count: 0, new_count: 0, vip_total_amount: 0, dormant_total_amount: 0 }, vip_customers: [], normal_customers: [], dormant_customers: [], all_customers: [] });
   return {
     ...data,
@@ -1074,7 +1092,7 @@ export async function fetchEmployeeCoach(startDate?: string, endDate?: string): 
   if (startDate) params.set("start_date", startDate);
   if (endDate) params.set("end_date", endDate);
   const suffix = params.toString() ? `?${params}` : "";
-  const response = await axios.get<any>(`${API_BASE_URL}/api/cinema/employee-performance${suffix}`);
+  const response = await axios.get<any>(`${getApiBase()}/api/cinema/employee-performance${suffix}`);
   const raw = response.data;
   if (raw.status !== 'ok' || !raw.employees?.length) {
     return { status: 'no_data', employees: [], team_summary: { total_employees: 0, avg_score: 0, top_performer: '-', needs_attention: [] }, ai_insights: [] };
@@ -1254,7 +1272,7 @@ export interface ScreeningSuggestionsData {
 }
 
 export async function fetchScreeningSuggestions(): Promise<ScreeningSuggestionsData> {
-  const response = await axios.get<ScreeningSuggestionsData>(`${API_BASE_URL}/api/cinema/screening-suggestions`);
+  const response = await axios.get<ScreeningSuggestionsData>(`${getApiBase()}/api/cinema/screening-suggestions`);
   const data = unwrapApiObject(response.data, {
     status: "ok",
     period: "",
@@ -1340,7 +1358,7 @@ export interface ConcessionRecommendationsData {
 }
 
 export async function fetchConcessionRecommendations(): Promise<ConcessionRecommendationsData> {
-  const response = await axios.get<ConcessionRecommendationsData>(`${API_BASE_URL}/api/concession/recommendations`);
+  const response = await axios.get<ConcessionRecommendationsData>(`${getApiBase()}/api/concession/recommendations`);
   const data = unwrapApiObject(response.data, { status: "ok", hot_items: [], cold_items: [], combos: [], pricing_suggestions: [], category_breakdown: [], hot_combinations: [], suggestions: [], suggested_actions: [] });
   return {
     ...data,
@@ -1356,11 +1374,29 @@ export async function fetchConcessionRecommendations(): Promise<ConcessionRecomm
 }
 
 // ============================================================
-// 收入预测
+// 收入预测 v2（多模型集成 + 外部特征）
 // ============================================================
 export interface RevenueForecast {
   status: string;
   generated_at: string;
+  external_data?: {
+    weather?: {
+      code: number;
+      text: string;
+      temp: number;
+      is_rainy: boolean;
+    } | null;
+    maoyan_boxoffice?: {
+      today_box_office: number;
+      today_audience: number;
+      movie_count: number;
+      movies: Array<{
+        name: string;
+        box: number;
+        rate: number;
+      }>;
+    } | null;
+  };
   forecasts: Array<{
     business: string;
     key: string;
@@ -1370,30 +1406,66 @@ export interface RevenueForecast {
     avg_daily_revenue?: number;
     recent_7d_avg?: number;
     recent_3d_avg?: number;
+    std_dev?: number;
     max_day?: { date: string; revenue: number };
     min_day?: { date: string; revenue: number };
     trend?: string;
     trend_label?: string;
-    slope?: number;
-    r_squared?: number;
     confidence?: string;
-    predictions_7d?: Array<{
+    confidence_score?: number;
+    predictions_3d?: Array<{
       date: string;
-      predicted_revenue: number;
       weekday: string;
+      predicted: number;
+      range_low: number;
+      range_high: number;
+      confidence: string;
+      predicted_audience?: number;  // 影院预测人次
+      cinema_box?: number;  // 影院预测票房（万元）
+      factors: {
+        holiday_type: string;
+        holiday_boost: number;
+        weather_boost: number;
+        is_weekend: boolean;
+        is_holiday: boolean;
+        weather_text?: string;
+        weather_temp?: number;
+      };
     }>;
     predictions_30d_total?: number;
+    predictions_30d_range?: {
+      low: number;
+      high: number;
+    };
     weekday_averages?: Record<string, number>;
   }>;
+  xgboost_predictions?: Record<string, Array<{
+    date: string;
+    predicted: number;
+    predicted_revenue: number;
+    weekday: string;
+    range_low: number;
+    range_high: number;
+    confidence: string;
+    model: string;
+  }>>;
   summary?: {
-    total_7d_prediction: number;
+    total_3d_prediction: number;
+    total_3d_range?: {
+      low: number;
+      high: number;
+    };
     total_30d_prediction: number;
+    total_30d_range?: {
+      low: number;
+      high: number;
+    };
   };
 }
 
 export async function fetchRevenueForecast(): Promise<RevenueForecast> {
-  const response = await axios.get<RevenueForecast>(`${API_BASE_URL}/api/ai/revenue-forecast`);
-  const data = unwrapApiObject(response.data, { status: "ok", generated_at: new Date().toISOString(), forecasts: [], summary: { total_7d_prediction: 0, total_30d_prediction: 0 } });
+  const response = await axios.get<RevenueForecast>(`${getApiBase()}/api/ai/revenue-forecast`);
+  const data = unwrapApiObject(response.data, { status: "ok", generated_at: new Date().toISOString(), forecasts: [], summary: { total_3d_prediction: 0, total_30d_prediction: 0 } });
   return {
     ...data,
     forecasts: unwrapApiArray(data.forecasts),
@@ -1428,7 +1500,7 @@ export interface CrossBusinessData {
 }
 
 export async function fetchCrossBusiness(): Promise<CrossBusinessData> {
-  const response = await axios.get<CrossBusinessData>(`${API_BASE_URL}/api/ai/cross-business`);
+  const response = await axios.get<CrossBusinessData>(`${getApiBase()}/api/ai/cross-business`);
   const data = unwrapApiObject(response.data, { status: "ok", generated_at: new Date().toISOString(), summary: {}, total_revenue_30d: 0, weekday_patterns: {}, suggestions: [] });
   return {
     ...data,
@@ -1514,7 +1586,7 @@ export interface ProfitOverview {
 }
 
 export async function fetchProfitOverview(): Promise<ProfitOverview> {
-  const response = await axios.get<ProfitOverview>(`${API_BASE_URL}/api/cinema/finance/profit`);
+  const response = await axios.get<ProfitOverview>(`${getApiBase()}/api/cinema/finance/profit`);
   return response.data;
 }
 
@@ -1627,7 +1699,7 @@ export interface InventoryOverview {
 }
 
 export async function fetchInventoryOverview(): Promise<InventoryOverview> {
-  const response = await axios.get<InventoryOverview>(`${API_BASE_URL}/api/cinema/finance/inventory`);
+  const response = await axios.get<InventoryOverview>(`${getApiBase()}/api/cinema/finance/inventory`);
   return response.data;
 }
 
@@ -1652,7 +1724,7 @@ export interface FinanceImportResult {
 export async function importFinanceBatch(files: File[]): Promise<FinanceImportResult> {
   const formData = new FormData();
   files.forEach((file) => formData.append("files", file));
-  const response = await axios.post<FinanceImportResult>(`${API_BASE_URL}/api/cinema/finance/import-batch`, formData);
+  const response = await axios.post<FinanceImportResult>(`${getApiBase()}/api/cinema/finance/import-batch`, formData);
   return response.data;
 }
 
@@ -1692,8 +1764,161 @@ export interface MemberDetail {
 }
 
 export async function fetchMemberAnalysis(days: number = 30): Promise<MemberAnalysis> {
-  const response = await axios.get<MemberAnalysis>(`${API_BASE_URL}/api/cinema/member-analysis`, {
+  const response = await axios.get<MemberAnalysis>(`${getApiBase()}/api/cinema/member-analysis`, {
     params: { days },
   });
   return response.data;
+}
+
+/** 库存预警配置 */
+export interface InventoryAlertConfig {
+  thresholds: Record<string, number>;
+  default_threshold: number;
+  excluded_products: string[];
+}
+
+/** 库存预警项 */
+export interface InventoryAlertItem {
+  item_name: string;
+  category: string;
+  stock_quantity: number;
+  threshold: number;
+  shortage: number;
+  stock_cost: number;
+  pos_price: number;
+}
+
+/** 库存预警响应 */
+export interface InventoryAlertResponse {
+  status: "ok" | "no_data";
+  message?: string;
+  date?: string;
+  file?: string;
+  summary: {
+    total_items: number;
+    alert_items: number;
+    total_shortage: number;
+    alert_rate: number;
+  };
+  items: InventoryAlertItem[];
+  config: InventoryAlertConfig;
+}
+
+/** 获取库存预警数据 */
+export async function fetchInventoryAlert(): Promise<InventoryAlertResponse> {
+  const response = await axios.get<InventoryAlertResponse>(`${getApiBase()}/api/cinema/inventory-alert`);
+  return response.data;
+}
+
+/** 测试库存预警（从最新Excel文件读取） */
+export async function testInventoryAlert(): Promise<InventoryAlertResponse> {
+  const response = await axios.get<InventoryAlertResponse>(`${getApiBase()}/api/cinema/inventory-alert/test`);
+  return response.data;
+}
+
+/** 获取库存预警配置 */
+export async function fetchInventoryAlertConfig(): Promise<{ status: string; config: InventoryAlertConfig }> {
+  const response = await axios.get(`${getApiBase()}/api/cinema/inventory-alert/config`);
+  return response.data;
+}
+
+/** 更新库存预警配置 */
+export async function updateInventoryAlertConfig(config: InventoryAlertConfig): Promise<{ status: string; message: string; config: InventoryAlertConfig }> {
+  const response = await axios.post(`${getApiBase()}/api/cinema/inventory-alert/config`, config);
+  return response.data;
+}
+
+/** 全部库存商品（含阈值/排除状态）- 前台+大仓 */
+export interface AllInventoryItem {
+  item_name: string;
+  category: string;
+  front_stock: number;     // 前台库存
+  wh_stock: number;        // 大仓库存
+  threshold: number;
+  is_excluded: boolean;
+  front_low: boolean;      // 前台是否低于阈值
+  wh_empty: boolean;       // 大仓是否无货
+  status: "critical" | "warning" | "ok" | "excluded";
+  shortage: number;
+  pos_price: number;
+}
+
+export interface AllInventoryResponse {
+  status: string;
+  front_file?: string;
+  wh_file?: string;
+  total?: number;
+  items: AllInventoryItem[];
+  config: InventoryAlertConfig;
+}
+
+/** 获取全部库存商品（含阈值状态） */
+export async function fetchAllInventoryItems(): Promise<AllInventoryResponse> {
+  const response = await axios.get<AllInventoryResponse>(`${getApiBase()}/api/cinema/inventory-alert/all-items`);
+  return response.data;
+}
+
+/** 更新单个商品的阈值或排除状态 */
+export async function updateSingleItemConfig(itemName: string, action: "set_threshold" | "exclude" | "include", value?: number): Promise<any> {
+  const response = await axios.post(`${getApiBase()}/api/cinema/inventory-alert/config/item`, {
+    item_name: itemName,
+    action,
+    value: value || 0,
+  });
+  return response.data;
+}
+
+/** 预算数据 */
+export interface BudgetData {
+  cinema: {
+    name: string;
+    monthly_target: number;
+    annual_target: number;
+    monthly_box_office_target: number;
+    annual_box_office_target: number;
+    monthly_concession_target: number;
+    annual_concession_target: number;
+  };
+  billiards: {
+    name: string;
+    monthly_target: number;
+    annual_target: number;
+  };
+  mahjong: {
+    name: string;
+    monthly_target: number;
+    annual_target: number;
+  };
+}
+
+/** 获取预算数据 */
+export async function fetchBudget(): Promise<BudgetData> {
+  const response = await axios.get<{ data: BudgetData }>(`${getApiBase()}/api/budget`);
+  return response.data.data;
+}
+
+// 快速统计 - 首页轻量级数据
+export interface QuickStatsData {
+  xiaotie: {
+    busy_count: number;
+    total_count: number;
+    summary_month: { revenue: number };
+    summary_year: { revenue: number };
+  } | null;
+  wu_laoban: {
+    active_orders: number;
+    total_rooms: number;
+    summary_month: { revenue: number };
+    summary_year: { revenue: number };
+  } | null;
+  has_detail_cache: boolean;
+}
+
+export async function fetchQuickStats(): Promise<QuickStatsData> {
+  const response = await axios.get<QuickStatsData>(`${getApiBase()}/api/quick-stats`);
+  return response.data;
+}
+
+export async function triggerDetailRefresh(): Promise<void> {
+  await axios.post(`${getApiBase()}/api/detail/refresh`);
 }

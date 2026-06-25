@@ -1,4 +1,5 @@
 import Head from "next/head";
+import { AppShell, PageHeader } from "../../components/dashboard";
 import Link from "next/link";
 import { ChangeEvent, useCallback, useEffect, useState } from "react";
 import {
@@ -59,7 +60,7 @@ export default function ProfitPage() {
   return (
     <>
       <Head><title>利润毛利 - 翡翠城经营驾驶舱</title></Head>
-      <main className="dashboardShell">
+      <AppShell currentPage="/dashboard/profit">
         <div className="topBar">
           <div>
             <Link href="/dashboard/cinema" className="backLink">← 返回影院</Link>
@@ -198,7 +199,7 @@ export default function ProfitPage() {
             )}
           </>
         )}
-      </main>
+      </AppShell>
     </>
   );
 }

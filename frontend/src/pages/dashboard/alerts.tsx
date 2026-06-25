@@ -1,11 +1,24 @@
+/**
+ * AI 预警页面
+ * 显示 AI 分析的业务异常检测结果
+ * 使用统一样式系统（浅色主题）
+ */
 import Head from "next/head";
-import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { getApiErrorMessage, unwrapApiArray, unwrapApiObject } from "../../lib/apiEnvelope";
 import { generateBusinessAlerts } from "../../lib/businessAlertRules";
 import { toOverviewBusinessSummaries } from "../../lib/businessAdapters";
 import { fetchOverview } from "../../lib/dashboardApi";
 import { fetchAiAnomalies } from "../../lib/dashboardApi";
+import {
+  AppShell,
+  PageHeader,
+  MetricCard,
+  CapsuleGroup,
+  SectionCard,
+  StatusBadge,
+  EmptyState,
+} from "../../components/dashboard";
 
 interface AnomalyItem {
   id?: string;
@@ -31,11 +44,26 @@ interface AnomaliesResponse {
   };
 }
 
-const SEVERITY_STYLES: Record<string, { bg: string; badge: string; border: string }> = {
-  high: { bg: "bg-red-900/30", badge: "bg-red-600", border: "border-red-700" },
-  medium: { bg: "bg-yellow-900/30", badge: "bg-yellow-600", border: "border-yellow-700" },
-  low: { bg: "bg-blue-900/30", badge: "bg-blue-600", border: "border-blue-700" },
+/** 严重程度映射到状态 */
+const SEVERITY_STATUS: Record<string, "error" | "warning" | "info"> = {
+  high: "error",
+  medium: "warning",
+  low: "info",
 };
+
+/** 严重程度中文标签 */
+const SEVERITY_LABELS: Record<string, string> = {
+  high: "高",
+  medium: "中",
+  low: "低",
+};
+
+/** 筛选选项 */
+const FILTER_OPTIONS = [
+  { value: "all", label: "全部" },
+  { value: "negative", label: "📉 负向异常" },
+  { value: "positive", label: "📈 正向异常" },
+];
 
 export default function AlertsPage() {
   const [data, setData] = useState<AnomaliesResponse | null>(null);
@@ -74,7 +102,7 @@ export default function AlertsPage() {
     return a.direction === filter;
   }) || [];
 
-  // Sort: negative first (more urgent), then by confidence desc
+  // 排序：负向优先（更紧急），然后按置信度降序
   const sorted = [...filtered].sort((a, b) => {
     if (a.direction !== b.direction) return a.direction === "negative" ? -1 : 1;
     return (b.confidence || 0) - (a.confidence || 0);
@@ -94,147 +122,156 @@ export default function AlertsPage() {
   return (
     <>
       <Head>
-        <title>AI 预警 · Ops Dashboard</title>
+        <title>AI 预警 · 翡翠城经营驾驶舱</title>
       </Head>
-      <main className="min-h-screen bg-gray-900 text-white p-6">
-        {/* Header */}
-        <div className="flex items-center justify-between mb-8">
-          <div>
-            <Link href="/" className="text-blue-400 hover:underline text-sm">← 返回主页</Link>
-            <h1 className="text-2xl font-bold mt-2">🔔 AI 异常预警</h1>
-            <p className="text-gray-400 text-sm mt-1">
-              基于 AI 分析的业务异常检测
-              {data?.generated_at && (
-                <span className="ml-2">· 分析时间 {new Date(data.generated_at).toLocaleString("zh-CN")}</span>
-              )}
-            </p>
-          </div>
-          <button onClick={refresh} disabled={loading}
-            className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-sm disabled:opacity-50">
-            🔄 刷新
-          </button>
-        </div>
-
-        {/* Summary */}
-        {data?.summary && (
-          <div className="grid grid-cols-3 gap-4 mb-6">
-            <div className="bg-gray-800 rounded-xl p-4 text-center">
-              <div className="text-3xl font-bold">{data.summary.total}</div>
-              <div className="text-gray-400 text-sm">异常总数</div>
-            </div>
-            <div className="bg-green-900/30 rounded-xl p-4 text-center border border-green-800">
-              <div className="text-3xl font-bold text-green-400">{data.summary.positive}</div>
-              <div className="text-gray-400 text-sm">📈 正向异常（增长）</div>
-            </div>
-            <div className="bg-red-900/30 rounded-xl p-4 text-center border border-red-800">
-              <div className="text-3xl font-bold text-red-400">{data.summary.negative}</div>
-              <div className="text-gray-400 text-sm">📉 负向异常（下降）</div>
-            </div>
-          </div>
-        )}
-
-        {/* Filter Tabs */}
-        <div className="flex gap-2 mb-6">
-          {(["all", "negative", "positive"] as const).map((f) => (
-            <button key={f} onClick={() => setFilter(f)}
-              className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                filter === f ? "bg-blue-600 text-white" : "bg-gray-800 text-gray-400 hover:bg-gray-700"
-              }`}>
-              {f === "all" ? "全部" : f === "negative" ? "📉 负向异常" : "📈 正向异常"}
+      <AppShell currentPage="/dashboard/alerts">
+        {/* 页面头部 */}
+        <PageHeader
+          title="🔔 AI 异常预警"
+          description={`基于 AI 分析的业务异常检测${data?.generated_at ? ` · 分析时间 ${new Date(data.generated_at).toLocaleString("zh-CN")}` : ""}`}
+          actions={
+            <button onClick={refresh} disabled={loading} className="btn btnSecondary">
+              🔄 刷新
             </button>
-          ))}
-        </div>
+          }
+        />
 
-        {/* Loading / Error */}
-        {loading && <div className="text-center text-gray-400 py-20">加载中…</div>}
-        {error && <div className="text-center text-red-400 py-20">{error}</div>}
-
-        {!loading && !error && businessAlerts.length > 0 && (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-6">
-            {businessAlerts.map((item) => (
-              <div key={`${item.businessType}-${item.id}`} className="bg-gray-800 rounded-xl p-4 border border-gray-700">
-                <div className="flex items-center justify-between mb-2">
-                  <strong className="text-white">{item.title}</strong>
-                  <span className={`text-xs px-2 py-0.5 rounded text-white ${item.level === "danger" ? "bg-red-600" : item.level === "warning" ? "bg-yellow-600" : "bg-blue-600"}`}>
-                    {item.level === "danger" ? "高" : item.level === "warning" ? "中" : "低"}
-                  </span>
-                </div>
-                <p className="text-sm text-gray-300">{item.businessName} · {item.message}</p>
-                <p className="text-xs text-blue-300 mt-2">{item.suggestion}</p>
-              </div>
-            ))}
+        {/* 统计卡片 */}
+        {data?.summary && (
+          <div className="metricGrid">
+            <MetricCard
+              label="异常总数"
+              value={data.summary.total}
+              icon="🔔"
+            />
+            <MetricCard
+              label="📈 正向异常（增长）"
+              value={data.summary.positive}
+              trendDirection="positive"
+            />
+            <MetricCard
+              label="📉 负向异常（下降）"
+              value={data.summary.negative}
+              trendDirection="negative"
+            />
           </div>
         )}
 
-        {/* Anomaly Cards */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {sorted.map((item, idx) => {
-            const severity = item.severity || (Math.abs(item.change_rate) > 0.5 ? "high" : Math.abs(item.change_rate) > 0.2 ? "medium" : "low");
-            const style = SEVERITY_STYLES[severity];
-            const isNegative = item.direction === "negative";
+        {/* 筛选按钮 */}
+        <CapsuleGroup
+          options={FILTER_OPTIONS}
+          value={filter}
+          onChange={(v) => setFilter(v as typeof filter)}
+        />
 
-            return (
-              <div key={item.id || idx} className={`rounded-xl shadow-lg p-6 border ${style.border} ${style.bg}`}>
-                <div className="flex items-center justify-between mb-3">
-                  <div className="flex items-center gap-2">
-                    <span className="text-2xl">{isNegative ? "📉" : "📈"}</span>
-                    <div>
-                      <h2 className="text-lg font-semibold">{item.metric}</h2>
-                      <p className="text-gray-400 text-xs">{item.business_line}</p>
-                    </div>
+        {/* 加载/错误状态 */}
+        {loading && <div className="loadingState">加载中…</div>}
+        {error && <div className="errorState"><div className="errorIcon">⚠️</div><div className="errorTitle">{error}</div></div>}
+
+        {/* 业务预警列表 */}
+        {!loading && !error && businessAlerts.length > 0 && (
+          <SectionCard title="业务预警" subtitle="基于经营数据的智能预警">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              {businessAlerts.map((item) => (
+                <div key={`${item.businessType}-${item.id}`} className="actionCard">
+                  <div className="actionIcon">
+                    {item.level === "danger" ? "🚨" : item.level === "warning" ? "⚠️" : "ℹ️"}
                   </div>
-                  <div className="flex items-center gap-2">
-                    <span className={`px-2 py-0.5 rounded text-xs font-bold text-white ${style.badge}`}>
-                      {severity === "high" ? "高" : severity === "medium" ? "中" : "低"}
-                    </span>
-                    {item.confidence > 0 && (
-                      <span className="text-xs text-gray-400">
-                        置信度 {(item.confidence * 100).toFixed(0)}%
-                      </span>
+                  <div className="actionContent">
+                    <div className="actionTitle">{item.title}</div>
+                    <p className="actionDesc">{item.businessName} · {item.message}</p>
+                    <p className="text-xs text-blue-600 mt-2">{item.suggestion}</p>
+                  </div>
+                  <StatusBadge status={item.level === "danger" ? "error" : item.level === "warning" ? "warning" : "info"}>
+                    {item.level === "danger" ? "高" : item.level === "warning" ? "中" : "低"}
+                  </StatusBadge>
+                </div>
+              ))}
+            </div>
+          </SectionCard>
+        )}
+
+        {/* 异常卡片列表 */}
+        {!loading && !error && sorted.length > 0 && (
+          <SectionCard title="异常详情" subtitle={`共 ${sorted.length} 条异常`}>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {sorted.map((item, idx) => {
+                const severity = item.severity || (Math.abs(item.change_rate) > 0.5 ? "high" : Math.abs(item.change_rate) > 0.2 ? "medium" : "low");
+                const status = SEVERITY_STATUS[severity];
+                const isNegative = item.direction === "negative";
+
+                return (
+                  <div key={item.id || idx} className="sectionCard">
+                    <div className="sectionHeader">
+                      <div className="flex items-center gap-2">
+                        <span className="text-2xl">{isNegative ? "📉" : "📈"}</span>
+                        <div>
+                          <div className="sectionTitle">{item.metric}</div>
+                          <div className="sectionSubtitle">{item.business_line}</div>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <StatusBadge status={status}>
+                          {SEVERITY_LABELS[severity]}
+                        </StatusBadge>
+                        {item.confidence > 0 && (
+                          <span className="text-xs text-gray-500">
+                            置信度 {(item.confidence * 100).toFixed(0)}%
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="metricGrid" style={{ gridTemplateColumns: "repeat(3, 1fr)" }}>
+                      <div className="metricCard">
+                        <div className="metricLabel">当前值</div>
+                        <div className="metricValue">{formatValue(item.current_value)}</div>
+                      </div>
+                      <div className="metricCard">
+                        <div className="metricLabel">基准值</div>
+                        <div className="metricValue">{formatValue(item.baseline_value)}</div>
+                      </div>
+                      <div className="metricCard">
+                        <div className="metricLabel">变化率</div>
+                        <div className={`metricValue ${isNegative ? "text-red-500" : "text-green-500"}`}>
+                          {formatRate(item.change_rate)}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* AI 建议 */}
+                    {item.ai_suggestion && (
+                      <div className="actionCard mt-4">
+                        <div className="actionIcon">🤖</div>
+                        <div className="actionContent">
+                          <div className="actionTitle">AI 建议</div>
+                          <p className="actionDesc whitespace-pre-wrap">{item.ai_suggestion}</p>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* 检测时间 */}
+                    {item.detected_at && (
+                      <p className="text-xs text-gray-500 mt-3">
+                        检测时间：{new Date(item.detected_at).toLocaleString("zh-CN")}
+                      </p>
                     )}
                   </div>
-                </div>
-
-                <div className="grid grid-cols-3 gap-3 mb-4">
-                  <div className="bg-gray-800/50 rounded-lg p-3 text-center">
-                    <div className="text-xs text-gray-400">当前值</div>
-                    <div className="text-xl font-bold">{formatValue(item.current_value)}</div>
-                  </div>
-                  <div className="bg-gray-800/50 rounded-lg p-3 text-center">
-                    <div className="text-xs text-gray-400">基准值</div>
-                    <div className="text-xl font-bold text-gray-300">{formatValue(item.baseline_value)}</div>
-                  </div>
-                  <div className="bg-gray-800/50 rounded-lg p-3 text-center">
-                    <div className="text-xs text-gray-400">变化率</div>
-                    <div className={`text-xl font-bold ${isNegative ? "text-red-400" : "text-green-400"}`}>
-                      {formatRate(item.change_rate)}
-                    </div>
-                  </div>
-                </div>
-
-                {/* AI Suggestion */}
-                {item.ai_suggestion && (
-                  <div className="p-3 bg-gray-800/60 rounded-lg">
-                    <div className="text-blue-400 text-xs font-semibold mb-1">🤖 AI 建议</div>
-                    <p className="text-gray-300 text-sm whitespace-pre-wrap">{item.ai_suggestion}</p>
-                  </div>
-                )}
-
-                {/* Detected time */}
-                {item.detected_at && (
-                  <p className="text-gray-500 text-xs mt-3">
-                    检测时间：{new Date(item.detected_at).toLocaleString("zh-CN")}
-                  </p>
-                )}
-              </div>
-            );
-          })}
-        </div>
-
-        {!loading && sorted.length === 0 && businessAlerts.length === 0 && (
-          <div className="text-center text-gray-500 py-20">暂无异常数据</div>
+                );
+              })}
+            </div>
+          </SectionCard>
         )}
-      </main>
+
+        {/* 空状态 */}
+        {!loading && sorted.length === 0 && businessAlerts.length === 0 && (
+          <EmptyState
+            icon="✅"
+            title="暂无异常数据"
+            description="所有业务指标正常运行"
+          />
+        )}
+      </AppShell>
     </>
   );
 }
