@@ -19,6 +19,10 @@ export default function CinemaPage() {
   const [loading, setLoading] = useState(false);
   const [uploadResult, setUploadResult] = useState<CinemaBatchImportResult | null>(null);
   const [filmQuery, setFilmQuery] = useState("");
+  const [filmDateMode, setFilmDateMode] = useState<"day" | "month" | "year">("day");
+  const [filmDate, setFilmDate] = useState(() => offsetDate(-1));
+  const [filmRankingData, setFilmRankingData] = useState<{ box: CinemaDetail["film_box_office_ranking"]; att: CinemaDetail["film_attendance_ranking"] }>({ box: [], att: [] });
+  const [filmLoading, setFilmLoading] = useState(false);
   const [error, setError] = useState("");
 
   /* 本月天数 */
@@ -81,6 +85,27 @@ export default function CinemaPage() {
 
   useEffect(() => { refresh(); }, [selectedDate, selectedDays]);
 
+  /* 影片排行独立查询 */
+  const refreshFilmRanking = useCallback(async () => {
+    setFilmLoading(true);
+    try {
+      const filmDays = filmDateMode === "year" ? 365 : filmDateMode === "month" ? new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate() : 1;
+      const filmStart = filmDateMode === "year"
+        ? `${new Date().getFullYear()}-01-01`
+        : filmDateMode === "month"
+          ? `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, "0")}-01`
+          : undefined;
+      const d = await fetchCinemaDetail(filmDateMode === "day" ? filmDate : undefined, filmDays, filmStart);
+      setFilmRankingData({ box: d.film_box_office_ranking || [], att: d.film_attendance_ranking || [] });
+    } catch {
+      setFilmRankingData({ box: [], att: [] });
+    } finally {
+      setFilmLoading(false);
+    }
+  }, [filmDateMode, filmDate]);
+
+  useEffect(() => { refreshFilmRanking(); }, [filmDateMode, filmDate]);
+
   const handleFile = async (event: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(event.target.files || []);
     if (!files.length) return;
@@ -113,8 +138,6 @@ export default function CinemaPage() {
   const missingFields = uploadResult
     ? unique(uploadSuccesses.flatMap((item) => item.missing_fields))
     : detail?.missing_fields || [];
-  const filmBoxOfficeRanking = filterFilms(detail?.film_box_office_ranking || [], filmQuery);
-  const filmAttendanceRanking = filterFilms(detail?.film_attendance_ranking || [], filmQuery);
   const cinemaSummary = toCinemaSummary(detail || overview || {});
 
   /* 标题文本 */
@@ -277,6 +300,15 @@ export default function CinemaPage() {
                 <span className="eyebrow">影片筛选</span>
                 <h2>{filmQuery ? `筛选：${filmQuery}` : "全部影片"}</h2>
               </div>
+              <div className="cinemaDateControls">
+                {[["day", "按日"], ["month", "按月"], ["year", "按年"]].map(([key, label]) => (
+                  <button key={key} className={`chartControl ${filmDateMode === key ? "active" : ""}`} onClick={() => setFilmDateMode(key as typeof filmDateMode)}>{label}</button>
+                ))}
+                {filmDateMode === "day" && (
+                  <input className="dateInput" type="date" value={filmDate} onChange={(e) => setFilmDate(e.target.value)} />
+                )}
+                {filmLoading && <span style={{ fontSize: 12, opacity: 0.6 }}>加载中...</span>}
+              </div>
               <input
                 className="filmSearchInput"
                 value={filmQuery}
@@ -286,8 +318,8 @@ export default function CinemaPage() {
             </section>
 
             <section className="mainGrid">
-              <RankingPanel title="影片票房排行" data={filmBoxOfficeRanking} valueKey="film_box_office" />
-              <RankingPanel title="影片人次排行" data={filmAttendanceRanking} valueKey="film_attendance" />
+              <RankingPanel title="影片票房排行" data={filterFilms(filmRankingData.box || [], filmQuery)} valueKey="film_box_office" />
+              <RankingPanel title="影片人次排行" data={filterFilms(filmRankingData.att || [], filmQuery)} valueKey="film_attendance" />
             </section>
 
             <section className="mainGrid">

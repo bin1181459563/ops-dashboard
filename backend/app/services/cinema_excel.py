@@ -56,8 +56,8 @@ FIELD_ALIASES = {
     "occupancy_rate": ["上座率", "上座率%", "平均上座率", "入座率", "满座率"],
     "concession_revenue": ["卖品收入", "卖品总收入", "卖品", "卖品销售额", "小卖收入", "商品收入", "实际售价（元）"],
     "film_name": ["影片名称", "影片", "电影名称", "片名"],
-    "film_box_office": ["影片票房", "影片收入", "单片票房", "电影票房", "票房（元）"],
-    "film_attendance": ["影片人次", "单片人次", "电影人次", "人次"],
+    "film_box_office": ["影片票房", "影片收入", "单片票房", "电影票房", "票房（元）", "票房总金额"],
+    "film_attendance": ["影片人次", "单片人次", "电影人次", "人次", "观影总人次"],
     # 卖品销售明细字段
     "concession_category": ["卖品大类"],
     "concession_sub_category": ["一级分类"],
@@ -116,6 +116,7 @@ def parse_cinema_file(file_bytes: bytes, filename: str) -> dict[str, Any]:
 
 
 def save_cinema_import(repository: Any, parsed: dict[str, Any]) -> None:
+    upserted_dates: set[str] = set()
     for snapshot in parsed["snapshots"]:
         snapshot = _merge_with_existing_snapshot(repository, snapshot)
         repository.upsert_daily_snapshot_values(
@@ -130,11 +131,12 @@ def save_cinema_import(repository: Any, parsed: dict[str, Any]) -> None:
             avg_order_value=snapshot["avg_order_value"],
             raw=snapshot["raw"],
         )
-    # 影片排名表：将影片数据分布到所有日期
+        upserted_dates.add(snapshot["date"])
+    # 影片排名表：将影片数据分布到没有影片数据的日期
     if parsed["report_type"] == "film_ranking":
         films = parsed.get("films") or []
         if films:
-            distribute_films_to_all_dates(repository, films)
+            distribute_films_to_all_dates(repository, films, skip_dates=upserted_dates)
 
 
 def _dedup_items(items: list[dict[str, Any]], key_fn: Any) -> list[dict[str, Any]]:
@@ -234,12 +236,14 @@ def _merge_with_existing_snapshot(repository: Any, snapshot: dict[str, Any]) -> 
     }
 
 
-def distribute_films_to_all_dates(repository: Any, films: list[dict[str, Any]]) -> None:
+def distribute_films_to_all_dates(repository: Any, films: list[dict[str, Any]], skip_dates: set[str] | None = None) -> None:
     """将影片数据分布到所有已有的影院快照中（不覆盖已有影片数据的快照）"""
     if not films:
         return
     snapshots = repository.daily_snapshots_for(BUSINESS_TYPE, PLATFORM, STORE_ID, 90)
     for snapshot in snapshots:
+        if skip_dates and snapshot["date"] in skip_dates:
+            continue
         raw = _load_raw(snapshot)
         # 跳过已有影片数据的快照（营运报表已有正确的单日影片数据）
         if raw.get("films"):
@@ -375,12 +379,12 @@ def cinema_detail(repository: Any, target_date: str | None = None, days: int = 3
     snapshots_30d = repository.daily_snapshots_for(BUSINESS_TYPE, PLATFORM, STORE_ID, days, max_date=max_date, start_date=start_date)
     trend_30d = [_snapshot_trend_item(item) for item in snapshots_30d]
     trend_7d = trend_30d[-7:]
-    films = _aggregate_films(snapshots_30d)
     latest_raw = _load_raw(snapshot)
     imports = repository.latest_sync_logs(platform=PLATFORM, limit=10)
 
     # 范围模式：today 字段用聚合数据（支持 start_date 或 days > 1）
-    if (start_date or days > 1) and not target_date and len(snapshots_30d) > 1:
+    is_range_mode = (start_date or days > 1) and not target_date and len(snapshots_30d) > 1
+    if is_range_mode:
         total_box = 0
         total_concession = 0
         total_customer = 0
@@ -406,6 +410,29 @@ def cinema_detail(repository: Any, target_date: str | None = None, days: int = 3
         }
     else:
         today_data = _overview_from_snapshot(snapshot, latest_raw)
+
+    # 影片数据：范围模式聚合所有日期，单日模式取当天
+    if is_range_mode:
+        film_totals: dict[str, dict[str, Any]] = {}
+        for s in snapshots_30d:
+            r = _load_raw(s)
+            for f in r.get("films", []):
+                name = f.get("film_name", "")
+                if not name:
+                    continue
+                if name not in film_totals:
+                    film_totals[name] = {"film_name": name, "film_box_office": 0.0, "film_attendance": 0}
+                film_totals[name]["film_box_office"] = round(film_totals[name]["film_box_office"] + f.get("film_box_office", 0), 2)
+                film_totals[name]["film_attendance"] += f.get("film_attendance", 0)
+        films = list(film_totals.values())
+    else:
+        films = latest_raw.get("films", [])
+        if not films:
+            for snap in reversed(snapshots_30d):
+                raw = _load_raw(snap)
+                if raw.get("films"):
+                    films = raw["films"]
+                    break
 
     return {
         "status": "ok",
@@ -600,7 +627,16 @@ def _build_snapshots(rows: list[dict[str, Any]], missing_fields: list[str], file
             film_totals[name]["film_attendance"] += film["film_attendance"]
         all_films = list(film_totals.values())
     for snapshot_date, date_rows in grouped.items():
-        films = [_film_from_row(row) for row in date_rows if _film_from_row(row)]
+        raw_films = [_film_from_row(row) for row in date_rows if _film_from_row(row)]
+        # 按影片名聚合（同一影片多场次合并）
+        film_agg: dict[str, dict[str, Any]] = {}
+        for f in raw_films:
+            name = f["film_name"]
+            if name not in film_agg:
+                film_agg[name] = {"film_name": name, "film_box_office": 0.0, "film_attendance": 0}
+            film_agg[name]["film_box_office"] = round(film_agg[name]["film_box_office"] + f["film_box_office"], 2)
+            film_agg[name]["film_attendance"] += f["film_attendance"]
+        films = list(film_agg.values())
         has_explicit_row_date = any(_parse_date(row.get("date")) for row in date_rows)
         box_office = sum(item["film_box_office"] for item in films) if films else _first_number(date_rows, "box_office")
         if not box_office and "票房收入" in missing_fields:
@@ -611,6 +647,25 @@ def _build_snapshots(rows: list[dict[str, Any]], missing_fields: list[str], file
             customer_count = int(round(sum(item["film_attendance"] for item in films)))
         screenings = int(round(_sum_or_first(date_rows, "screenings", prefer_sum=bool(films) and not has_explicit_row_date)))
         occupancy_rate = _first_rate(date_rows, "occupancy_rate")
+        # 如果没有影片票房数据但有 film_name + screenings，按场次比例拆分总票房/人次
+        if not films and box_office:
+            film_screenings: dict[str, int] = {}
+            for row in date_rows:
+                fname = _clean_cell(row.get("film_name"))
+                if not fname:
+                    continue
+                fs = int(round(_parse_number(row.get("screenings")) or 0))
+                if fs > 0:
+                    film_screenings[fname] = film_screenings.get(fname, 0) + fs
+            total_fs = sum(film_screenings.values())
+            if total_fs > 0:
+                for fname, fs in film_screenings.items():
+                    ratio = fs / total_fs
+                    films.append({
+                        "film_name": fname,
+                        "film_box_office": round(box_office * ratio, 2),
+                        "film_attendance": int(round(customer_count * ratio)),
+                    })
         # 卖品明细数据
         concession_items = []
         if report_type == "concession_detail":
@@ -651,8 +706,9 @@ def _build_snapshots(rows: list[dict[str, Any]], missing_fields: list[str], file
             member_consume = sum(item["amount"] for item in member_items)
             # 会员表不设置 customer_count，保留已有数据
             customer_count = 0
-        # 影片排名表：使用汇总的影片数据
-        if report_type == "film_ranking" and all_films:
+        # 影片排名表：仅当只有1个日期（累计报表）时才用汇总数据；
+        # 多日期文件（如场次放映明细）保留每日独立影片数据
+        if report_type == "film_ranking" and all_films and len(grouped) == 1:
             films = all_films
         revenue = round(box_office + concession_revenue, 2)
         avg_order_value = round(revenue / customer_count, 2) if customer_count else 0

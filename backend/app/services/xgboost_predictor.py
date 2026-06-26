@@ -307,7 +307,7 @@ def predict_with_xgboost(
         else:
             weekday_avg[wd] = 5000  # 默认5000元
     
-    for i in range(1, days + 1):
+    for i in range(0, days + 1):
         # 构建特征
         if len(current_data) < 30:
             break

@@ -182,9 +182,9 @@ def forecast_revenue(repo: DashboardRepository) -> dict[str, Any]:
         # 置信度（提前计算，供预测使用）
         confidence = _calc_confidence(data_count, r2)
 
-        # 预测未来7天
+        # 预测未来7天（包含今天）
         predictions_7d = []
-        for i in range(1, 8):
+        for i in range(0, 8):
             future_date = now.date() + timedelta(days=i)
             day_idx = data_count + i - 1  # 回归中的x
             lr_pred = max(0, slope * day_idx + intercept)
@@ -232,9 +232,9 @@ def forecast_revenue(repo: DashboardRepository) -> dict[str, Any]:
 
             predictions_7d.append(pred_entry)
 
-        # 预测未来30天
+        # 预测未来30天（包含今天）
         predictions_30d_total = 0
-        for i in range(1, 31):
+        for i in range(0, 31):
             future_date = now.date() + timedelta(days=i)
             day_idx = data_count + i - 1
             lr_pred = max(0, slope * day_idx + intercept)
