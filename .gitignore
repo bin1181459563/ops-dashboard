@@ -26,3 +26,4 @@ backend/.env
 tmp/
 .DS_Store
 *.backup
+backend/data/
