@@ -2,7 +2,6 @@ import Head from "next/head";
 import { AppShell, PageHeader } from "../../components/dashboard";
 import Link from "next/link";
 import { ChangeEvent, useCallback, useEffect, useMemo, useState } from "react";
-import { CinemaTrendChart } from "../../components/dashboard/CinemaTrendChart";
 import { getDashboardErrorMessage } from "../../components/dashboard/DashboardStatePanel";
 import { toCinemaSummary } from "../../lib/businessAdapters";
 import { fetchCinemaDetail, fetchCinemaOverview, fetchConcessionDetail, importCinemaBatch } from "../../lib/dashboardApi";
@@ -324,11 +323,6 @@ export default function CinemaPage() {
               onDateModeChange={setConcessionDateMode}
               onDateChange={setConcessionDate}
               onSortByChange={setConcessionSortBy}
-            />
-
-            <CinemaTrendChart
-              trend7d={detail?.box_office_trend_7d || []}
-              trend30d={detail?.box_office_trend_30d || []}
             />
 
             <section className="panel cinemaFilterPanel">

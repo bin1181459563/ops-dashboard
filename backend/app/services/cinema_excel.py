@@ -165,14 +165,6 @@ def save_cinema_import(repository: Any, parsed: dict[str, Any]) -> None:
             distribute_films_to_all_dates(repository, films, skip_dates=upserted_dates)
 
 
-def _dedup_items(items: list[dict[str, Any]], key_fn: Any) -> list[dict[str, Any]]:
-    """按 key_fn 去重，保留最后出现的（新数据优先）"""
-    seen: dict[Any, dict[str, Any]] = {}
-    for item in items:
-        key = key_fn(item)
-        seen[key] = item
-    return list(seen.values())
-
 
 def _merge_with_existing_snapshot(repository: Any, snapshot: dict[str, Any]) -> dict[str, Any]:
     existing = repository.daily_snapshot_for_date(BUSINESS_TYPE, PLATFORM, STORE_ID, snapshot["date"])
@@ -197,21 +189,12 @@ def _merge_with_existing_snapshot(repository: Any, snapshot: dict[str, Any]) -> 
     existing_open_card = existing_raw.get("member_open_card_items") or []
     # 卖品：有新数据时直接替换（明细表每行是独立交易，不能按品名去重）
     merged_concession = incoming_concession if incoming_concession else existing_concession
-    # 会员消费：去重合并（以 member_id+product_name+amount 为 key）
-    merged_member = _dedup_items(
-        existing_member + incoming_member if incoming_member else existing_member,
-        key_fn=lambda x: (x.get("member_id", ""), x.get("product_name", ""), x.get("amount", 0)),
-    )
-    # 会员充值：去重合并（以 member_id+card_number+amount 为 key）
-    merged_recharge = _dedup_items(
-        existing_recharge + incoming_recharge if incoming_recharge else existing_recharge,
-        key_fn=lambda x: (x.get("member_id", ""), x.get("card_number", ""), x.get("amount", 0)),
-    )
-    # 会员开卡：去重合并（以 member_id+card_number+amount 为 key）
-    merged_open_card = _dedup_items(
-        existing_open_card + incoming_open_card if incoming_open_card else existing_open_card,
-        key_fn=lambda x: (x.get("member_id", ""), x.get("card_number", ""), x.get("amount", 0)),
-    )
+    # 会员消费：有新数据时直接替换
+    merged_member = incoming_member if incoming_member else existing_member
+    # 会员充值：有新数据时直接替换
+    merged_recharge = incoming_recharge if incoming_recharge else existing_recharge
+    # 会员开卡：有新数据时直接替换
+    merged_open_card = incoming_open_card if incoming_open_card else existing_open_card
     # 影片排名表不覆盖已有营运数据（避免累计票房写成单日值）
     incoming_report_type = incoming_raw.get("report_type", "")
     existing_has_operations = existing_summary.get("box_office", 0) > 0
