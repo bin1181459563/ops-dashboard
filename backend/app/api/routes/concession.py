@@ -11,7 +11,7 @@ from app.services.cinema_excel import BUSINESS_TYPE, PLATFORM, STORE_ID, _load_r
 router = APIRouter()
 
 # 娱乐项目排除列表（顽小游/小铁台球/顽麻社/娱乐）
-_EXCLUDED_CATEGORIES = {"顽小游", "小铁台球", "顽麻社", "娱乐", "ZWHRWH"}
+_EXCLUDED_CATEGORIES = {"顽小游", "小铁台球", "顽麻社", "娱乐"}
 
 def _is_entertainment(item: dict) -> bool:
     """判断商品是否属于娱乐项目"""
@@ -29,28 +29,33 @@ def _is_entertainment(item: dict) -> bool:
 def get_concession_detail(
     request: Request,
     date: str | None = Query(default=None),
-    days: int = Query(default=30, ge=1, le=90),
+    days: int = Query(default=30, ge=1, le=366),
+    start_date: str | None = Query(default=None),
     category: str | None = Query(default=None),
 ) -> dict:
     """获取卖品详情，支持按日期范围和类别筛选"""
     from datetime import date as date_cls
     repository = request.app.state.repository
     target_date = date or date_cls.today().isoformat()
-    
-    # 获取日期范围内的快照
-    snapshots = repository.daily_snapshots_for(BUSINESS_TYPE, PLATFORM, STORE_ID, days, max_date=target_date)
+
+    # 获取日期范围内的快照（支持 start_date 或 days 两种模式）
+    snapshots = repository.daily_snapshots_for(BUSINESS_TYPE, PLATFORM, STORE_ID, days, max_date=target_date, start_date=start_date)
     if not snapshots:
         return {"status": "no_data", "message": "暂无卖品数据"}
     
     # 汇总所有卖品明细
     all_items: list[dict[str, Any]] = []
     daily_summary: list[dict[str, Any]] = []
-    
+    summary_total = 0.0  # 从summary.concession_revenue汇总（准确值）
+
     for snapshot in snapshots:
         raw = _load_raw(snapshot)
         items = raw.get("concession_items") or []
         summary = raw.get("summary", {})
-        
+
+        # 累加汇总卖品收入（已排除娱乐项）
+        summary_total += summary.get("concession_revenue", 0) or 0
+
         # 按类别筛选
         if category:
             items = [item for item in items if item.get("category") == category]
@@ -78,7 +83,7 @@ def get_concession_detail(
     # 按品名汇总
     item_stats: dict[str, dict[str, Any]] = {}
     for item in all_items:
-        name = item.get("item_name", "未知")
+        name = item.get("item_name") or item.get("name") or "未知"
         if name not in item_stats:
             item_stats[name] = {
                 "item_name": name,
@@ -92,9 +97,10 @@ def get_concession_detail(
     # 排序
     category_list = sorted(category_stats.values(), key=lambda x: -x["revenue"])
     item_list = sorted(item_stats.values(), key=lambda x: -x["revenue"])
-    
-    # 总计
-    total_revenue = sum(cat["revenue"] for cat in category_list)
+
+    # 总计：优先用summary汇总（准确），fallback到明细求和
+    items_revenue = sum(cat["revenue"] for cat in category_list)
+    total_revenue = summary_total if summary_total > 0 else items_revenue
     total_quantity = sum(cat["quantity"] for cat in category_list)
     
     return {

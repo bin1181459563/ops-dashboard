@@ -42,7 +42,7 @@ export function toCinemaSummary(raw: unknown): BusinessSummary {
   const revenue = numberValue(today.revenue, record.revenue);
   const orders = numberValue(today.screenings, record.screenings, record.orders, record.order_count);
   const customers = numberValue(today.customer_count, record.customer_count, record.customers, record.attendance);
-  const avgOrderValue = nullableNumber(today.avg_order_value, record.avg_order_value, average(revenue, customers || orders));
+  const avgOrderValue = nullableNumber(today.avg_order_value, record.avg_order_value, average(revenue, customers || orders)) ?? (customers > 0 ? revenue / customers : (orders > 0 ? revenue / orders : 0));
 
   return {
     businessType: "cinema",

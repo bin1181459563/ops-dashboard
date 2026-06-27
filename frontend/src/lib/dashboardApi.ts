@@ -433,10 +433,11 @@ export interface ConcessionDetail {
   daily_trend?: Array<{ date: string; revenue: number; items_count: number }>;
 }
 
-export async function fetchConcessionDetail(date?: string, days: number = 30, category?: string): Promise<ConcessionDetail> {
+export async function fetchConcessionDetail(date?: string, days: number = 30, category?: string, startDate?: string): Promise<ConcessionDetail> {
   const params = new URLSearchParams();
   if (date) params.set("date", date);
   params.set("days", String(days));
+  if (startDate) params.set("start_date", startDate);
   if (category) params.set("category", category);
   const response = await axios.get<ConcessionDetail>(`${getApiBase()}/api/cinema/concession?${params}`);
   return unwrapApiObject(response.data, response.data);
@@ -836,6 +837,12 @@ export async function fetchXiaotieFullDetail(): Promise<XiaotieFullDetail> {
   return unwrapApiObject(response.data, response.data);
 }
 
+/** 从数据库读取台球详情（秒开），用于首页优先渲染 */
+export async function fetchXiaotieDbDetail(): Promise<XiaotieFullDetail> {
+  const response = await axios.get<XiaotieFullDetail>(`${getApiBase()}/api/db/xiaotie`);
+  return response.data;
+}
+
 export type TableInfo = XiaotieTable;
 export interface XiaotieHourlyItem {
   hour: string;
@@ -949,6 +956,12 @@ export interface WuLaobanFullDetail {
 export async function fetchWuLaobanFullDetail(): Promise<WuLaobanFullDetail> {
   const response = await axios.get<WuLaobanFullDetail>(`${getApiBase()}/api/detail/wu_laoban`);
   return unwrapApiObject(response.data, response.data);
+}
+
+/** 从数据库读取棋牌详情（秒开），用于首页优先渲染 */
+export async function fetchWuLaobanDbDetail(): Promise<WuLaobanFullDetail> {
+  const response = await axios.get<WuLaobanFullDetail>(`${getApiBase()}/api/db/wu_laoban`);
+  return response.data;
 }
 
 export type RoomInfo = MahjongRoom;
@@ -1910,6 +1923,10 @@ export interface QuickStatsData {
     total_rooms: number;
     summary_month: { revenue: number };
     summary_year: { revenue: number };
+  } | null;
+  cinema: {
+    summary_month: { revenue: number; customer_count: number };
+    summary_year: { revenue: number; customer_count: number };
   } | null;
   has_detail_cache: boolean;
 }

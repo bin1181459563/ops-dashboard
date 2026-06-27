@@ -669,7 +669,8 @@ def get_wu_laoban_full_detail() -> dict | None:
             # 包间实时状态
             "rooms": rooms,
             "total_rooms": len(ALL_ROOMS),
-            "busy_count": len([r for r in rooms if r.get("is_busy")]),
+            "busy_count": len([r for r in rooms if r.get("status") == "使用中"]),
+            "active_orders": len([r for r in rooms if r.get("status") == "使用中"]),
             # 收入构成（前端: data.revenue_today.total）
             "revenue_today": revenue_today,
             "revenue_month": revenue_month,

@@ -25,6 +25,13 @@ class Settings(BaseSettings):
     wu_laoban_sid: str = "1238"
     wu_laoban_mid: str = "2400"
 
+    # 凤凰云智影院配置
+    fenghuang_access_token: str = ""
+    fenghuang_token_file: Path = Path.home() / ".hermes" / "workspace" / "fenghuang-token.txt"
+    fenghuang_gray_lease_code: str = "sfcsygj"
+    fenghuang_gray_user_id: str = "301000018790324397"
+    fenghuang_cinema_link_id: str = "16466"
+
     ai_llm_base_url: str = ""
     ai_llm_api_key: str = ""
     ai_llm_model: str = "mimo-v2.5-pro"

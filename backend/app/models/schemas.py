@@ -13,7 +13,7 @@ def utc_now() -> datetime:
 
 
 class UnifiedMetric(BaseModel):
-    platform: Literal["xiaotie", "wu_laoban", "qgcloud"]
+    platform: Literal["xiaotie", "wu_laoban", "qgcloud", "fenghuang"]
     store_id: str = "feicuicheng"
     revenue: float = 0
     orders: int = 0
@@ -23,7 +23,7 @@ class UnifiedMetric(BaseModel):
 
 
 class AlertRecord(BaseModel):
-    platform: Literal["xiaotie", "wu_laoban", "qgcloud"]
+    platform: Literal["xiaotie", "wu_laoban", "qgcloud", "fenghuang"]
     store_id: str = "feicuicheng"
     alert_type: Literal["low_usage", "usage_low", "usage_drop", "revenue_drop", "token_invalid", "sync_failed", "stale_data"]
     message: str

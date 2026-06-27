@@ -35,10 +35,10 @@ def overview(request: Request) -> ApiEnvelope:
     total_orders = sum(platforms[platform].get("orders", 0) for platform in included_platforms)
     sources = [platforms[platform].get("source", "api") for platform in included_platforms]
     
-    # 影院数据每天晚上导入，所以"今日"显示的是昨日数据
-    from datetime import date, timedelta
-    yesterday = (date.today() - timedelta(days=1)).isoformat()
-    cinema = cinema_overview(repository, target_date=yesterday)
+    # 影院数据现在通过API实时采集，可以直接显示今日数据
+    from datetime import date
+    today = date.today().isoformat()
+    cinema = cinema_overview(repository, target_date=today)
     
     if cinema["status"] == "ok":
         total_revenue += cinema.get("revenue", 0)

@@ -21,8 +21,8 @@ class FinanceImportError(ValueError):
 
 
 # ── 娱乐项目排除列表 ──────────────────────────────────────
-# 顽小游(PS5/Switch)、小铁台球、顽麻社(棋牌)、娱乐(库存分类)、ZWHRWH(股东商品)
-EXCLUDED_CATEGORIES = {"顽小游", "小铁台球", "顽麻社", "娱乐", "ZWHRWH"}
+# 顽小游(PS5/Switch)、小铁台球、顽麻社(棋牌)、娱乐(库存分类)
+EXCLUDED_CATEGORIES = {"顽小游", "小铁台球", "顽麻社", "娱乐"}
 
 
 def _is_excluded(item: dict) -> bool:

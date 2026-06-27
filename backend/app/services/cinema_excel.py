@@ -14,7 +14,7 @@ STORE_ID = "cinema_feicuicheng"
 STORE_NAME = "SFC上影国际影城翡翠城店"
 
 # 娱乐项目排除列表（与 concession.py 保持一致）
-_EXCLUDED_CATEGORIES = {"顽小游", "小铁台球", "顽麻社", "娱乐", "ZWHRWH"}
+_EXCLUDED_CATEGORIES = {"顽小游", "小铁台球", "顽麻社", "娱乐"}
 
 def _is_entertainment(item: dict) -> bool:
     """判断卖品明细是否属于娱乐项目"""
@@ -28,12 +28,26 @@ def _is_entertainment(item: dict) -> bool:
     return False
 
 def _filtered_concession_revenue(raw: dict) -> float:
-    """从原始数据中计算排除娱乐项后的卖品收入"""
+    """从原始数据中计算排除娱乐项后的卖品收入
+    
+    优先使用 summary 中的汇总数值（来自营运综合表，数据完整），
+    减去被排除的娱乐项金额。当 items 不完整时（总额 < summary），
+    直接返回 summary（无法可靠过滤，需要导入卖品销售明细表）。
+    """
     items = raw.get("concession_items") or []
-    if items:
-        return sum(item["revenue"] for item in items if not _is_entertainment(item))
-    # 没有明细数据时，返回原始汇总值（无法过滤）
-    return raw.get("summary", {}).get("concession_revenue", 0)
+    summary_total = raw.get("summary", {}).get("concession_revenue", 0)
+    if not items:
+        # 没有明细数据时，返回原始汇总值（无法过滤）
+        return summary_total
+    # 计算排除项总金额（兼容 revenue 和 pay_amount 两种字段名）
+    excluded_sum = sum(item.get("revenue") or item.get("pay_amount", 0) for item in items if _is_entertainment(item))
+    items_total = sum(item.get("revenue") or item.get("pay_amount", 0) for item in items)
+    # items 完整时（覆盖95%以上），直接用 items 过滤
+    if summary_total > 0 and items_total >= summary_total * 0.95:
+        return round(items_total - excluded_sum, 2)
+    # items 不完整时，直接返回 summary（无法可靠过滤）
+    # 需要导入卖品销售明细表才能正确排除娱乐项
+    return summary_total
 
 CANONICAL_LABELS = {
     "date": "日期",
@@ -54,7 +68,7 @@ FIELD_ALIASES = {
     "customer_count": ["观影人次", "观影总人数", "观影人数", "购票人次", "票数"],
     "screenings": ["场次数", "场次", "放映场次", "排片场次"],
     "occupancy_rate": ["上座率", "上座率%", "平均上座率", "入座率", "满座率"],
-    "concession_revenue": ["卖品收入", "卖品总收入", "卖品", "卖品销售额", "小卖收入", "商品收入", "实际售价（元）"],
+    "concession_revenue": ["卖品收入", "卖品总收入", "卖品", "卖品销售额", "小卖收入", "商品收入"],
     "film_name": ["影片名称", "影片", "电影名称", "片名"],
     "film_box_office": ["影片票房", "影片收入", "单片票房", "电影票房", "票房（元）", "票房总金额"],
     "film_attendance": ["影片人次", "单片人次", "电影人次", "人次", "观影总人次"],
@@ -66,12 +80,24 @@ FIELD_ALIASES = {
     "concession_original_price": ["原价（元）"],
     "concession_actual_price": ["实际售价（元）"],
     "concession_payment": ["支付金额（元）"],
+    "order_no": ["订单号"],
+    "operator": ["销售员", "操作员", "收银员"],
     # 会员卡消费明细字段
     "member_id": ["会员ID"],
     "card_type": ["卡类型"],
     "product_type": ["商品类型"],
     "product_name": ["商品名称"],
     "card_consume_amount": ["卡消费金额（元）"],
+    # 会员开卡明细字段
+    "issue_date": ["发卡日期"],
+    "open_date": ["开卡日期"],
+    "open_amount": ["开卡充值金额"],
+    "card_number": ["卡号"],
+    "card_policy": ["卡政策"],
+    # 会员充值明细字段
+    "recharge_date": ["充值/续费日期"],
+    "recharge_amount": ["充值金额（元）"],
+    "recharge_channel": ["充值渠道"],
 }
 
 
@@ -160,20 +186,31 @@ def _merge_with_existing_snapshot(repository: Any, snapshot: dict[str, Any]) -> 
     existing_films = existing_raw.get("films") or []
     # 合并影片列表（去重，优先用新数据）
     merged_films = incoming_films if incoming_films else existing_films
-    # 合并卖品和会员数据 —— 去重替换，不追加（避免重复导入导致累积）
+    # 合并卖品和会员数据 —— concession_detail 用 incoming 替换（明细行是原始交易记录，每行独立）
     incoming_concession = incoming_raw.get("concession_items") or []
     existing_concession = existing_raw.get("concession_items") or []
     incoming_member = incoming_raw.get("member_items") or []
     existing_member = existing_raw.get("member_items") or []
-    # 卖品：去重合并（以 item_name+category+quantity 为 key）
-    merged_concession = _dedup_items(
-        existing_concession + incoming_concession if incoming_concession else existing_concession,
-        key_fn=lambda x: (x.get("item_name", ""), x.get("category", ""), x.get("quantity", 0)),
-    )
-    # 会员：去重合并（以 member_id+product_name+amount 为 key）
+    incoming_recharge = incoming_raw.get("member_recharge_items") or []
+    existing_recharge = existing_raw.get("member_recharge_items") or []
+    incoming_open_card = incoming_raw.get("member_open_card_items") or []
+    existing_open_card = existing_raw.get("member_open_card_items") or []
+    # 卖品：有新数据时直接替换（明细表每行是独立交易，不能按品名去重）
+    merged_concession = incoming_concession if incoming_concession else existing_concession
+    # 会员消费：去重合并（以 member_id+product_name+amount 为 key）
     merged_member = _dedup_items(
         existing_member + incoming_member if incoming_member else existing_member,
         key_fn=lambda x: (x.get("member_id", ""), x.get("product_name", ""), x.get("amount", 0)),
+    )
+    # 会员充值：去重合并（以 member_id+card_number+amount 为 key）
+    merged_recharge = _dedup_items(
+        existing_recharge + incoming_recharge if incoming_recharge else existing_recharge,
+        key_fn=lambda x: (x.get("member_id", ""), x.get("card_number", ""), x.get("amount", 0)),
+    )
+    # 会员开卡：去重合并（以 member_id+card_number+amount 为 key）
+    merged_open_card = _dedup_items(
+        existing_open_card + incoming_open_card if incoming_open_card else existing_open_card,
+        key_fn=lambda x: (x.get("member_id", ""), x.get("card_number", ""), x.get("amount", 0)),
     )
     # 影片排名表不覆盖已有营运数据（避免累计票房写成单日值）
     incoming_report_type = incoming_raw.get("report_type", "")
@@ -184,7 +221,8 @@ def _merge_with_existing_snapshot(repository: Any, snapshot: dict[str, Any]) -> 
         best_concession = existing_summary.get("concession_revenue", 0)
         best_customer = existing_summary.get("customer_count", 0)
         best_screenings = existing_summary.get("screenings", 0)
-        best_occupancy = existing_summary.get("occupancy_rate", 0)
+        # 上座率：取非零值（场次放映明细有上座率数据）
+        best_occupancy = _best_value(existing_summary.get("occupancy_rate"), incoming_summary.get("occupancy_rate"))
         best_member_consume = existing_summary.get("member_consume", 0)
     else:
         # 取各字段最优值（非零优先）
@@ -202,6 +240,8 @@ def _merge_with_existing_snapshot(repository: Any, snapshot: dict[str, Any]) -> 
         "films": merged_films,
         "concession_items": merged_concession,
         "member_items": merged_member,
+        "member_recharge_items": merged_recharge,
+        "member_open_card_items": merged_open_card,
         "summary": {
             "box_office": best_box_office,
             "concession_revenue": best_concession,
@@ -209,6 +249,8 @@ def _merge_with_existing_snapshot(repository: Any, snapshot: dict[str, Any]) -> 
             "screenings": best_screenings,
             "occupancy_rate": best_occupancy,
             "member_consume": best_member_consume,
+            "member_recharge_total": sum(item.get("amount", 0) for item in merged_recharge),
+            "member_open_card_total": sum(item.get("amount", 0) for item in merged_open_card),
             "revenue": revenue,
             "avg_order_value": avg_order_value,
         },
@@ -350,7 +392,7 @@ def cinema_overview(repository: Any, target_date: str | None = None, days: int =
         "box_office": raw.get("summary", {}).get("box_office", 0),
         "concession_revenue": round(filtered_concession, 2),
         "customer_count": snapshot["customer_count"],
-        "screenings": snapshot["orders"],
+        "screenings": raw.get("summary", {}).get("screenings", snapshot["orders"]),
         "occupancy_rate": snapshot["usage_rate"],
         "avg_order_value": snapshot["avg_order_value"],
         "last_import_time": latest_import_time or snapshot["created_at"],
@@ -510,7 +552,17 @@ def _read_rows(file_bytes: bytes, extension: str) -> list[list[Any]]:
         sheet = workbook.active
         if sheet.max_row == 1 and sheet.max_column == 1:
             sheet.reset_dimensions()
-        return [[cell for cell in row] for row in sheet.iter_rows(values_only=True)]
+        rows = [[cell for cell in row] for row in sheet.iter_rows(values_only=True)]
+        # openpyxl read_only 模式有时因维度检测问题只读到1行，用 pandas 重试
+        if len(rows) <= 1:
+            try:
+                import pandas as pd
+                df = pd.read_excel(io.BytesIO(file_bytes), header=None, dtype=object)
+                df = df.fillna("")
+                rows = [list(row) for row in df.itertuples(index=False, name=None)]
+            except Exception:
+                pass  # pandas 失败就保留 openpyxl 结果
+        return rows
     if extension == ".xls":
         import xlrd
 
@@ -530,9 +582,18 @@ def _rows_to_records(rows: list[list[Any]]) -> tuple[list[dict[str, Any]], set[s
     for row in rows[header_index + 1:]:
         if not any(_clean_cell(value) for value in row):
             continue
+        # 跳过合计行（所有字段都是 '--'）和元数据行（影院名称: / 下载人:）
+        first_cell = _clean_cell(row[0]) if row else ""
+        if first_cell == "--":
+            continue
+        if first_cell.startswith("影院名称:") or first_cell.startswith("下载人:"):
+            continue
         record: dict[str, Any] = {}
         for index, field in header_map.items():
             record[field] = row[index] if index < len(row) else None
+        # 跳过含 '--' 值的合计行（有些文件只在部分列有 '--'）
+        if all(_clean_cell(v) in ("", "--") for v in record.values()):
+            continue
         if any(_clean_cell(value) for value in record.values()):
             records.append(record)
     filtered = _filter_store_rows(records)
@@ -570,8 +631,16 @@ def _detect_report_type(matched_fields: set[str], filename: str) -> str:
         return "film_ranking"
     if "卖品销售" in filename or "concession_item_name" in matched_fields or "concession_category" in matched_fields:
         return "concession_detail"
+    if "会员卡" in filename and "充值" in filename:
+        return "member_recharge"
+    if "会员卡" in filename and "开卡" in filename:
+        return "member_open_card"
     if "会员卡" in filename or "member_id" in matched_fields or "card_consume_amount" in matched_fields:
         return "member_detail"
+    if {"recharge_date", "recharge_amount"}.intersection(matched_fields):
+        return "member_recharge"
+    if {"issue_date", "open_amount"}.intersection(matched_fields) or {"open_date", "open_amount"}.intersection(matched_fields):
+        return "member_open_card"
     if {"date", "box_office", "customer_count", "screenings"}.intersection(matched_fields):
         return "operations"
     if "film" in name:
@@ -585,6 +654,8 @@ def _missing_fields_for_report(matched_fields: set[str], report_type: str) -> li
         "film_ranking": ["film_name", "film_box_office", "film_attendance"],
         "concession_detail": ["date", "concession_revenue"],
         "member_detail": ["date", "customer_count"],
+        "member_recharge": ["recharge_date", "recharge_amount"],
+        "member_open_card": ["issue_date", "open_amount"],
         "generic": list(CANONICAL_LABELS),
     }
     required = required_by_type.get(report_type, required_by_type["generic"])
@@ -597,6 +668,8 @@ def _report_note(report_type: str) -> str:
         "film_ranking": "影片成绩排名表用于补充影片票房和人次排行，不覆盖同日营运综合数据。",
         "concession_detail": "卖品销售明细用于补充卖品收入明细。",
         "member_detail": "会员卡明细用于补充会员消费信息。",
+        "member_recharge": "会员充值明细用于记录会员充值金额和笔数。",
+        "member_open_card": "会员开卡明细用于记录新会员开卡数量和金额。",
     }.get(report_type, "已按通用表格解析。")
 
 
@@ -605,7 +678,15 @@ def _build_snapshots(rows: list[dict[str, Any]], missing_fields: list[str], file
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     fallback_date = _date_range_end_from_filename(filename)
     for row in rows:
-        parsed_date = _parse_date(row.get("date")) or fallback_date
+        # 根据报表类型选择日期字段
+        if report_type == "member_recharge":
+            parsed_date = _parse_date(row.get("recharge_date"))
+        elif report_type == "member_open_card":
+            parsed_date = _parse_date(row.get("issue_date")) or _parse_date(row.get("open_date"))
+        else:
+            parsed_date = _parse_date(row.get("date"))
+        if not parsed_date:
+            parsed_date = fallback_date
         if parsed_date:
             grouped[parsed_date].append(row)
     snapshots: list[dict[str, Any]] = []
@@ -645,7 +726,7 @@ def _build_snapshots(rows: list[dict[str, Any]], missing_fields: list[str], file
         customer_count = int(round(sum(item["film_attendance"] for item in films))) if films else int(round(_first_number(date_rows, "customer_count")))
         if not customer_count and "观影人次" in missing_fields:
             customer_count = int(round(sum(item["film_attendance"] for item in films)))
-        screenings = int(round(_sum_or_first(date_rows, "screenings", prefer_sum=bool(films) and not has_explicit_row_date)))
+        screenings = int(round(_sum_or_first(date_rows, "screenings", prefer_sum=True)))
         occupancy_rate = _first_rate(date_rows, "occupancy_rate")
         # 如果没有影片票房数据但有 film_name + screenings，按场次比例拆分总票房/人次
         if not films and box_office:
@@ -669,21 +750,46 @@ def _build_snapshots(rows: list[dict[str, Any]], missing_fields: list[str], file
         # 卖品明细数据
         concession_items = []
         if report_type == "concession_detail":
+            # 按订单号分组，合并同一个订单的多条记录
+            order_groups = defaultdict(list)
             for row in date_rows:
-                item_name = _clean_cell(row.get("concession_item_name"))
+                order_no = _clean_cell(row.get("order_no")) or str(row.get("order_no", ""))
+                order_groups[order_no].append(row)
+            
+            for order_no, rows in order_groups.items():
+                # 取数量>0的记录作为主记录
+                main_row = None
+                total_payment = 0
+                for row in rows:
+                    quantity = int(_parse_number(row.get("concession_quantity")))
+                    payment = _parse_number(row.get("concession_payment"))
+                    total_payment += payment
+                    if quantity > 0:
+                        main_row = row
+                
+                if not main_row:
+                    main_row = rows[0]
+                
+                item_name = _clean_cell(main_row.get("concession_item_name"))
                 if not item_name:
                     continue
-                category = _clean_cell(row.get("concession_category"))
-                sub_category = _clean_cell(row.get("concession_sub_category"))
-                quantity = int(_parse_number(row.get("concession_quantity")))
-                actual_price = _parse_number(row.get("concession_actual_price")) or _parse_number(row.get("concession_payment"))
-                if actual_price > 0:
+                category = _clean_cell(main_row.get("concession_category"))
+                sub_category = _clean_cell(main_row.get("concession_sub_category"))
+                quantity = int(_parse_number(main_row.get("concession_quantity")))
+                actual_price = _parse_number(main_row.get("concession_actual_price"))
+                operator = _clean_cell(main_row.get("operator"))
+                
+                # 收入 = 支付金额合计（含优惠券），如果为0则用实际售价
+                revenue = total_payment if total_payment != 0 else actual_price
+                
+                if revenue != 0 or quantity != 0:
                     concession_items.append({
                         "item_name": item_name,
                         "category": category,
                         "sub_category": sub_category,
                         "quantity": quantity,
-                        "revenue": actual_price,
+                        "revenue": revenue,
+                        "operator": operator,
                     })
             if concession_items and not concession_revenue:
                 concession_revenue = sum(item["revenue"] for item in concession_items)
@@ -696,16 +802,62 @@ def _build_snapshots(rows: list[dict[str, Any]], missing_fields: list[str], file
                 product_type = _clean_cell(row.get("product_type"))
                 product_name = _clean_cell(row.get("product_name"))
                 card_amount = _parse_number(row.get("card_consume_amount"))
+                operator = _clean_cell(row.get("operator"))
                 if card_amount > 0:
                     member_items.append({
                         "member_id": member_id,
                         "product_type": product_type,
                         "product_name": product_name,
                         "amount": card_amount,
+                        "operator": operator,
                     })
             member_consume = sum(item["amount"] for item in member_items)
             # 会员表不设置 customer_count，保留已有数据
             customer_count = 0
+        # 会员充值数据
+        member_recharge_items = []
+        member_recharge_total = 0
+        if report_type == "member_recharge":
+            for row in date_rows:
+                member_id = _clean_cell(row.get("member_id"))
+                card_number = _clean_cell(row.get("card_number"))
+                card_type = _clean_cell(row.get("card_type"))
+                recharge_amount = _parse_number(row.get("recharge_amount"))
+                operator = _clean_cell(row.get("operator"))
+                if recharge_amount > 0:
+                    member_recharge_items.append({
+                        "member_id": member_id,
+                        "card_number": card_number,
+                        "card_type": card_type,
+                        "amount": recharge_amount,
+                        "operator": operator,
+                    })
+            member_recharge_total = sum(item["amount"] for item in member_recharge_items)
+            # 充值表不设置 customer_count 和 box_office，保留已有数据
+            customer_count = 0
+            box_office = 0
+        # 会员开卡数据
+        member_open_card_items = []
+        member_open_card_total = 0
+        if report_type == "member_open_card":
+            for row in date_rows:
+                member_id = _clean_cell(row.get("member_id"))
+                card_number = _clean_cell(row.get("card_number"))
+                card_type = _clean_cell(row.get("card_type"))
+                open_amount = _parse_number(row.get("open_amount"))
+                operator = _clean_cell(row.get("operator"))
+                if open_amount > 0:
+                    member_open_card_items.append({
+                        "member_id": member_id,
+                        "card_number": card_number,
+                        "card_type": card_type,
+                        "amount": open_amount,
+                        "operator": operator,
+                    })
+            member_open_card_total = sum(item["amount"] for item in member_open_card_items)
+            # 开卡表不设置 customer_count 和 box_office，保留已有数据
+            customer_count = 0
+            box_office = 0
         # 影片排名表：仅当只有1个日期（累计报表）时才用汇总数据；
         # 多日期文件（如场次放映明细）保留每日独立影片数据
         if report_type == "film_ranking" and all_films and len(grouped) == 1:
@@ -725,12 +877,16 @@ def _build_snapshots(rows: list[dict[str, Any]], missing_fields: list[str], file
                 "screenings": screenings,
                 "occupancy_rate": occupancy_rate,
                 "member_consume": member_consume,
+                "member_recharge_total": member_recharge_total,
+                "member_open_card_total": member_open_card_total,
                 "revenue": revenue,
                 "avg_order_value": avg_order_value,
             },
             "films": films,
             "concession_items": concession_items,
             "member_items": member_items,
+            "member_recharge_items": member_recharge_items,
+            "member_open_card_items": member_open_card_items,
             "rows": date_rows,
         }
         snapshots.append(

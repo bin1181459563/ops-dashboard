@@ -12,7 +12,6 @@ import type { CinemaOverview } from "../../types/dashboard";
 export default function CinemaPage() {
   const [overview, setOverview] = useState<CinemaOverview | null>(null);
   const [detail, setDetail] = useState<CinemaDetail | null>(null);
-  const [concession, setConcession] = useState<ConcessionDetail | null>(null);
   const [dateMode, setDateMode] = useState<"today" | "yesterday" | "day_before" | "week" | "month" | "custom">("yesterday");
   const [customDate, setCustomDate] = useState(() => offsetDate(-1));
   const [uploading, setUploading] = useState(false);
@@ -24,6 +23,13 @@ export default function CinemaPage() {
   const [filmRankingData, setFilmRankingData] = useState<{ box: CinemaDetail["film_box_office_ranking"]; att: CinemaDetail["film_attendance_ranking"] }>({ box: [], att: [] });
   const [filmLoading, setFilmLoading] = useState(false);
   const [error, setError] = useState("");
+
+  /* 卖品独立筛选状态 */
+  const [concessionDateMode, setConcessionDateMode] = useState<"day" | "month" | "year">("day");
+  const [concessionDate, setConcessionDate] = useState(() => offsetDate(-1));
+  const [concessionSortBy, setConcessionSortBy] = useState<"revenue" | "quantity">("revenue");
+  const [concession, setConcession] = useState<ConcessionDetail | null>(null);
+  const [concessionLoading, setConcessionLoading] = useState(false);
 
   /* 本月天数 */
   const monthDays = useMemo(() => {
@@ -64,18 +70,17 @@ export default function CinemaPage() {
 
   const selectedDays = dateMode === "month" ? monthDays : dateMode === "week" ? 7 : 1;
 
+  /* 主数据刷新（不含卖品） */
   const refresh = useCallback(async () => {
     if (loading) return;
     setLoading(true);
     try {
-      const [overviewData, detailData, concessionData] = await Promise.all([
+      const [overviewData, detailData] = await Promise.all([
         fetchCinemaOverview(selectedDate, selectedDays, startDate),
         fetchCinemaDetail(selectedDate, selectedDays, startDate),
-        fetchConcessionDetail(selectedDate, selectedDays),
       ]);
       setOverview(overviewData);
       setDetail(detailData);
-      setConcession(concessionData);
     } catch (e: any) {
       setError(getDashboardErrorMessage(e, "获取影院数据失败"));
     } finally {
@@ -84,6 +89,28 @@ export default function CinemaPage() {
   }, [loading, selectedDate, selectedDays, startDate]);
 
   useEffect(() => { refresh(); }, [selectedDate, selectedDays]);
+
+  /* 卖品独立查询 */
+  const refreshConcession = useCallback(async () => {
+    setConcessionLoading(true);
+    try {
+      const now = new Date();
+      const days = concessionDateMode === "year" ? 365 : concessionDateMode === "month" ? new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate() : 1;
+      const startDate = concessionDateMode === "year"
+        ? `${now.getFullYear()}-01-01`
+        : concessionDateMode === "month"
+          ? `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`
+          : undefined;
+      const d = await fetchConcessionDetail(concessionDateMode === "day" ? concessionDate : undefined, days, undefined, startDate);
+      setConcession(d);
+    } catch {
+      setConcession(null);
+    } finally {
+      setConcessionLoading(false);
+    }
+  }, [concessionDateMode, concessionDate]);
+
+  useEffect(() => { refreshConcession(); }, [concessionDateMode, concessionDate]);
 
   /* 影片排行独立查询 */
   const refreshFilmRanking = useCallback(async () => {
@@ -116,6 +143,7 @@ export default function CinemaPage() {
       const result = await importCinemaBatch(files);
       setUploadResult(result);
       await refresh();
+      await refreshConcession();
     } catch (e: any) {
       const detail = e?.response?.data?.detail;
       if (detail && typeof detail === "object" && "results" in detail) {
@@ -164,7 +192,7 @@ export default function CinemaPage() {
           </div>
           <div className="topMeta">
             {overview?.last_import_time && <span className="clock">最后导入 {formatDateTime(overview.last_import_time)}</span>}
-            <button className="refreshButton" onClick={refresh} disabled={loading}>
+            <button className="refreshButton" onClick={() => { refresh(); refreshConcession(); }} disabled={loading}>
               {loading ? "刷新中..." : "刷新"}
             </button>
           </div>
@@ -286,9 +314,17 @@ export default function CinemaPage() {
               <Metric label="观影人次" value={`${cinemaSummary.customers}`} caption={`${cinemaSummary.orders} 场 · 上座率 ${percent(cinemaSummary.utilizationRate || 0)}`} tone="muted" />
             </section>
 
-            {/* 卖品大类详情 */}
-            <ConcessionSection data={concession} />
-
+            {/* 卖品大类详情（独立筛选） */}
+            <ConcessionSection
+              data={concession}
+              dateMode={concessionDateMode}
+              date={concessionDate}
+              sortBy={concessionSortBy}
+              loading={concessionLoading}
+              onDateModeChange={setConcessionDateMode}
+              onDateChange={setConcessionDate}
+              onSortByChange={setConcessionSortBy}
+            />
 
             <CinemaTrendChart
               trend7d={detail?.box_office_trend_7d || []}
@@ -350,10 +386,28 @@ export default function CinemaPage() {
   );
 }
 
-/* ===== 卖品大类详情组件 ===== */
-function ConcessionSection({ data }: { data: ConcessionDetail | null }) {
+/* ===== 卖品大类详情组件（独立筛选 + TOP10排序） ===== */
+function ConcessionSection({
+  data, dateMode, date, sortBy, loading,
+  onDateModeChange, onDateChange, onSortByChange,
+}: {
+  data: ConcessionDetail | null;
+  dateMode: "day" | "month" | "year";
+  date: string;
+  sortBy: "revenue" | "quantity";
+  loading: boolean;
+  onDateModeChange: (m: "day" | "month" | "year") => void;
+  onDateChange: (d: string) => void;
+  onSortByChange: (s: "revenue" | "quantity") => void;
+}) {
   if (!data || data.status !== "ok" || !data.categories?.length) return null;
   const total = data.summary?.total_revenue || 0;
+
+  /* TOP10排序 */
+  const sortedItems = [...(data.items || [])].sort((a, b) =>
+    sortBy === "quantity" ? b.quantity - a.quantity : b.revenue - a.revenue
+  );
+
   return (
     <section className="panel">
       <div className="panelHeader">
@@ -361,10 +415,28 @@ function ConcessionSection({ data }: { data: ConcessionDetail | null }) {
           <span className="eyebrow">卖品分析</span>
           <h2>卖品大类详情</h2>
         </div>
-        <span className="panelHint">
-          总收入 {currency(total)} · 日均 {currency(data.summary?.avg_daily_revenue || 0)}
-        </span>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          {loading && <span style={{ fontSize: 12, opacity: 0.6 }}>加载中...</span>}
+          <span className="panelHint">
+            总收入 {currency(total)} · 日均 {currency(data.summary?.avg_daily_revenue || 0)}
+          </span>
+        </div>
       </div>
+
+      {/* 卖品独立时间筛选 */}
+      <div className="cinemaDateControls" style={{ marginBottom: 16 }}>
+        {[["day", "按日"], ["month", "按月"], ["year", "按年"]].map(([key, label]) => (
+          <button
+            key={key}
+            className={`chartControl ${dateMode === key ? "active" : ""}`}
+            onClick={() => onDateModeChange(key as typeof dateMode)}
+          >{label}</button>
+        ))}
+        {dateMode === "day" && (
+          <input className="dateInput" type="date" value={date} onChange={(e) => onDateChange(e.target.value)} />
+        )}
+      </div>
+
       <div className="concessionCategoryGrid">
         {data.categories.map((cat) => {
           const pct = total > 0 ? ((cat.revenue / total) * 100).toFixed(1) : "0";
@@ -385,17 +457,27 @@ function ConcessionSection({ data }: { data: ConcessionDetail | null }) {
           );
         })}
       </div>
-      {/* TOP10单品 */}
-      {data.items && data.items.length > 0 && (
+
+      {/* TOP10单品（可切换排序） */}
+      {sortedItems.length > 0 && (
         <div style={{ marginTop: 16 }}>
           <div className="panelHeader" style={{ marginBottom: 8 }}>
             <h3>卖品TOP10</h3>
-            <span className="panelHint">按收入排序</span>
+            <div className="cinemaDateControls" style={{ marginBottom: 0 }}>
+              <button
+                className={`chartControl ${sortBy === "revenue" ? "active" : ""}`}
+                onClick={() => onSortByChange("revenue")}
+              >按收入</button>
+              <button
+                className={`chartControl ${sortBy === "quantity" ? "active" : ""}`}
+                onClick={() => onSortByChange("quantity")}
+              >按数量</button>
+            </div>
           </div>
           <table className="rankingTable">
             <thead><tr><th>#</th><th>品名</th><th>大类</th><th>数量</th><th>收入</th></tr></thead>
             <tbody>
-              {data.items.slice(0, 10).map((item, i) => (
+              {sortedItems.slice(0, 10).map((item, i) => (
                 <tr key={`${item.item_name}-${i}`}>
                   <td>{i + 1}</td>
                   <td>{item.item_name}</td>
