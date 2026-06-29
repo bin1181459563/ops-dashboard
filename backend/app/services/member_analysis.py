@@ -1,78 +1,178 @@
 """
-会员消费分析服务
-数据来源: 凤凰云智 会员卡消费明细查询 Excel
-过滤条件: 仅翡翠城店（SFC上影国际影城翡翠城店）
+会员消费分析服务。
+数据来源: daily_snapshots.raw_json 中的会员消费、充值、开卡明细。
 """
 from __future__ import annotations
 
+import json
 from collections import defaultdict
 from datetime import datetime
-from pathlib import Path
 from typing import Any
 
-import openpyxl
+from app.core.database import DashboardRepository
 
-DATA_DIR = Path.home() / ".hermes" / "workspace" / "cinema-data"
-CINEMA_NAME = "SFC上影国际影城翡翠城店"
-
-# 娱乐项目排除
-_EXCLUDED_KEYWORDS = {"顽小游", "小铁台球", "顽麻社", "轰趴"}
+BUSINESS_TYPE = "cinema"
+PLATFORM = "fenghuang"
+STORE_ID = "cinema_feicuicheng"
 
 
-def _find_latest_file() -> Path | None:
-    """查找最新的会员卡消费明细文件"""
-    files = sorted(
-        DATA_DIR.glob("会员卡消费明细查询2026-*.xlsx"),
-        key=lambda f: f.stat().st_mtime,
-        reverse=True,
-    )
-    return files[0] if files else None
+def get_member_analysis(repository: DashboardRepository, days: int = 30) -> dict[str, Any]:
+    snapshots = repository.daily_snapshots_for(BUSINESS_TYPE, PLATFORM, STORE_ID, days)
+    if not snapshots:
+        return _empty_response("暂无影院数据库快照")
+
+    members: dict[str, dict[str, Any]] = defaultdict(_member_bucket)
+    channel_stats: dict[str, int] = defaultdict(int)
+    member_consumption_rows = 0
+    recharge_rows = 0
+    open_card_rows = 0
+    member_consumption_days = 0
+    recharge_days = 0
+    open_card_days = 0
+
+    for snapshot in snapshots:
+        raw = _parse_raw(snapshot.get("raw_json"))
+        snapshot_date = snapshot.get("date")
+        member_items = raw.get("member_items") or []
+        recharge_items = raw.get("member_recharge_items") or []
+        open_card_items = raw.get("member_open_card_items") or []
+        if member_items:
+            member_consumption_days += 1
+        if recharge_items:
+            recharge_days += 1
+        if open_card_items:
+            open_card_days += 1
+
+        for item in member_items:
+            member_id = _member_id(item)
+            if not member_id:
+                continue
+            amount = _number(item.get("amount", item.get("pay_amount", item.get("card_consume_amount", 0))))
+            if amount <= 0:
+                continue
+            product_type = _text(item.get("product_type", item.get("type", "未知")))
+            product_name = _text(item.get("product_name", item.get("item_name", "未知商品")))
+            channel = _text(item.get("channel", item.get("consume_channel", item.get("pay_method", ""))))
+            consume_time = _text(item.get("time", item.get("consume_time", snapshot_date or "")))
+
+            member_consumption_rows += 1
+            member = members[member_id]
+            member["member_id"] = member_id
+            member["card_type"] = _text(item.get("card_type", member.get("card_type", "")))
+            member["total_amount"] += amount
+            member["total_count"] += 1
+            member["channels"].add(channel or "未知")
+            member["products"][product_name] += amount
+            _touch_time(member, consume_time)
+
+            if "影票" in product_type:
+                member["ticket_amount"] += amount
+                member["ticket_count"] += 1
+            elif "卖品" in product_type:
+                member["concession_amount"] += amount
+                member["concession_count"] += 1
+
+        for item in recharge_items:
+            member_id = _member_id(item)
+            if not member_id:
+                continue
+            amount = _number(item.get("amount", item.get("pay_amount", 0)))
+            member = members[member_id]
+            member["member_id"] = member_id
+            member["card_type"] = _text(item.get("card_type", member.get("card_type", "")))
+            member["recharge_amount"] += amount
+            member["recharge_count"] += 1 if amount > 0 else 0
+            recharge_rows += 1
+
+        for item in open_card_items:
+            member_id = _member_id(item)
+            if not member_id:
+                continue
+            member = members[member_id]
+            member["member_id"] = member_id
+            member["card_type"] = _text(item.get("card_type", member.get("card_type", "")))
+            member["open_card_count"] += 1
+            member["open_card_amount"] += _number(item.get("pay_amount", item.get("amount", 0)))
+            open_card_rows += 1
+
+    member_list = [_public_member(member) for member in members.values() if member.get("member_id")]
+    member_list.sort(key=lambda item: (-item["total_amount"], -item.get("recharge_amount", 0), item["member_id"]))
+
+    for member in member_list:
+        for channel in member.get("channels", []):
+            channel_stats[channel or "未知"] += 1
+
+    total_members = len(member_list)
+    total_amount = sum(item["total_amount"] for item in member_list)
+    total_count = sum(item["total_count"] for item in member_list)
+    total_recharge_amount = sum(item.get("recharge_amount", 0) for item in member_list)
+    open_card_count = sum(item.get("open_card_count", 0) for item in member_list)
+
+    data_gaps = []
+    if member_consumption_rows == 0:
+        data_gaps.append("会员消费明细缺失")
+    elif member_consumption_days < max(2, len(snapshots) * 0.2):
+        data_gaps.append(f"会员消费明细覆盖不足（{member_consumption_days}/{len(snapshots)}天）")
+    if recharge_rows == 0:
+        data_gaps.append("会员充值明细缺失")
+    if open_card_rows == 0:
+        data_gaps.append("会员开卡明细缺失")
+
+    return {
+        "status": "ok",
+        "source": "daily_snapshots",
+        "data_gaps": data_gaps,
+        "data_coverage": {
+            "snapshot_days": len(snapshots),
+            "member_consumption_days": member_consumption_days,
+            "member_recharge_days": recharge_days,
+            "member_open_card_days": open_card_days,
+            "member_consumption_rows": member_consumption_rows,
+            "member_recharge_rows": recharge_rows,
+            "member_open_card_rows": open_card_rows,
+        },
+        "summary": {
+            "total_members": total_members,
+            "total_amount": round(total_amount, 2),
+            "total_count": total_count,
+            "avg_per_member": round(total_amount / total_members, 2) if total_members else 0,
+            "avg_per_visit": round(total_amount / total_count, 2) if total_count else 0,
+            "total_recharge_amount": round(total_recharge_amount, 2),
+            "open_card_count": open_card_count,
+        },
+        "frequency_distribution": _frequency_distribution(member_list),
+        "avg_amount_distribution": _avg_amount_distribution(member_list),
+        "channel_stats": dict(channel_stats),
+        "top_members": member_list[:20],
+        "all_members": member_list,
+    }
 
 
-def _parse_sheet(path: Path) -> list[dict]:
-    """解析Excel，返回行字典列表"""
-    wb = openpyxl.load_workbook(path, data_only=True, read_only=False)
-    ws = wb.active
-    rows = list(ws.iter_rows(min_row=5, values_only=True))
-    wb.close()
-    if not rows:
-        return []
-    headers = [str(h).strip() if h else f"col_{i}" for i, h in enumerate(rows[0])]
-    result = []
-    for row in rows[1:]:
-        if not row or not row[0]:
-            continue
-        first = str(row[0]) if row[0] else ""
-        if first.startswith("合计") or first.startswith("总计"):
-            continue
-        record = {}
-        for i, val in enumerate(row):
-            if i < len(headers):
-                record[headers[i]] = val
-        result.append(record)
-    return result
+def _empty_response(message: str) -> dict[str, Any]:
+    return {
+        "status": "no_data",
+        "source": "daily_snapshots",
+        "message": message,
+        "data_gaps": ["影院数据库快照缺失"],
+        "summary": {
+            "total_members": 0,
+            "total_amount": 0,
+            "total_count": 0,
+            "avg_per_member": 0,
+            "avg_per_visit": 0,
+            "total_recharge_amount": 0,
+            "open_card_count": 0,
+        },
+        "frequency_distribution": _frequency_distribution([]),
+        "avg_amount_distribution": _avg_amount_distribution([]),
+        "channel_stats": {},
+        "top_members": [],
+        "all_members": [],
+    }
 
 
-def _is_excluded(item_name: str) -> bool:
-    """判断是否为娱乐项目"""
-    for kw in _EXCLUDED_KEYWORDS:
-        if kw in item_name:
-            return True
-    return False
-
-
-def get_member_analysis(days: int = 30) -> dict[str, Any]:
-    """获取会员消费分析数据"""
-    path = _find_latest_file()
-    if not path:
-        return {"status": "no_data", "message": "未找到会员卡消费明细报表"}
-
-    rows = _parse_sheet(path)
-    if not rows:
-        return {"status": "no_data", "message": "报表数据为空"}
-
-    # 按会员聚合数据
-    members: dict[str, dict[str, Any]] = defaultdict(lambda: {
+def _member_bucket() -> dict[str, Any]:
+    return {
         "member_id": "",
         "card_type": "",
         "total_amount": 0.0,
@@ -81,143 +181,132 @@ def get_member_analysis(days: int = 30) -> dict[str, Any]:
         "ticket_count": 0,
         "concession_amount": 0.0,
         "concession_count": 0,
+        "recharge_amount": 0.0,
+        "recharge_count": 0,
+        "open_card_amount": 0.0,
+        "open_card_count": 0,
         "first_time": None,
         "last_time": None,
         "channels": set(),
         "products": defaultdict(float),
-    })
+    }
 
-    for r in rows:
-        # 过滤翡翠城店
-        cinema = str(r.get("消费影院", "")).strip()
-        if CINEMA_NAME not in cinema:
+
+def _public_member(member: dict[str, Any]) -> dict[str, Any]:
+    total_count = int(member["total_count"])
+    total_amount = float(member["total_amount"])
+    return {
+        "member_id": member["member_id"],
+        "card_type": member["card_type"] or "未知",
+        "total_amount": round(total_amount, 2),
+        "total_count": total_count,
+        "avg_amount": round(total_amount / total_count, 2) if total_count else 0,
+        "ticket_amount": round(member["ticket_amount"], 2),
+        "ticket_count": int(member["ticket_count"]),
+        "concession_amount": round(member["concession_amount"], 2),
+        "concession_count": int(member["concession_count"]),
+        "recharge_amount": round(member["recharge_amount"], 2),
+        "recharge_count": int(member["recharge_count"]),
+        "open_card_amount": round(member["open_card_amount"], 2),
+        "open_card_count": int(member["open_card_count"]),
+        "first_time": member["first_time"].isoformat() if member["first_time"] else None,
+        "last_time": member["last_time"].isoformat() if member["last_time"] else None,
+        "channels": sorted(member["channels"]),
+        "top_products": sorted(
+            [{"name": name, "amount": round(amount, 2)} for name, amount in member["products"].items()],
+            key=lambda item: -item["amount"],
+        )[:5],
+    }
+
+
+def _frequency_distribution(members: list[dict[str, Any]]) -> dict[str, int]:
+    distribution = {"1次": 0, "2-3次": 0, "4-5次": 0, "6-10次": 0, "10次以上": 0}
+    for member in members:
+        count = int(member.get("total_count") or 0)
+        if count <= 0:
             continue
+        if count == 1:
+            distribution["1次"] += 1
+        elif count <= 3:
+            distribution["2-3次"] += 1
+        elif count <= 5:
+            distribution["4-5次"] += 1
+        elif count <= 10:
+            distribution["6-10次"] += 1
+        else:
+            distribution["10次以上"] += 1
+    return distribution
 
-        member_id = str(r.get("会员ID", "")).strip()
-        if not member_id or member_id == "None":
-            continue
 
-        # 解析时间
-        time_str = str(r.get("消费时间", "")).strip()
-        try:
-            consume_time = datetime.strptime(time_str, "%Y-%m-%d %H:%M:%S")
-        except (ValueError, TypeError):
-            continue
-
-        # 获取金额
-        amount = float(r.get("卡消费金额（元）", 0) or 0)
+def _avg_amount_distribution(members: list[dict[str, Any]]) -> dict[str, int]:
+    distribution = {"0-20元": 0, "20-50元": 0, "50-100元": 0, "100-200元": 0, "200元以上": 0}
+    for member in members:
+        amount = float(member.get("avg_amount") or 0)
         if amount <= 0:
             continue
+        if amount < 20:
+            distribution["0-20元"] += 1
+        elif amount < 50:
+            distribution["20-50元"] += 1
+        elif amount < 100:
+            distribution["50-100元"] += 1
+        elif amount < 200:
+            distribution["100-200元"] += 1
+        else:
+            distribution["200元以上"] += 1
+    return distribution
 
-        # 排除娱乐项目
-        product_name = str(r.get("商品名称", "")).strip()
-        if _is_excluded(product_name):
+
+def _parse_raw(raw_json: Any) -> dict[str, Any]:
+    if isinstance(raw_json, dict):
+        return raw_json
+    if isinstance(raw_json, str):
+        try:
+            return json.loads(raw_json)
+        except json.JSONDecodeError:
+            return {}
+    return {}
+
+
+def _member_id(item: dict[str, Any]) -> str:
+    return _text(
+        item.get("member_id")
+        or item.get("card_no")
+        or item.get("card_number")
+        or item.get("card_no_masked")
+    )
+
+
+def _touch_time(member: dict[str, Any], value: str) -> None:
+    parsed = _parse_time(value)
+    if parsed is None:
+        return
+    if member["first_time"] is None or parsed < member["first_time"]:
+        member["first_time"] = parsed
+    if member["last_time"] is None or parsed > member["last_time"]:
+        member["last_time"] = parsed
+
+
+def _parse_time(value: str) -> datetime | None:
+    value = _text(value)
+    if not value:
+        return None
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(value[:19] if "%H" in fmt else value[:10], fmt)
+        except ValueError:
             continue
+    return None
 
-        # 商品类型
-        product_type = str(r.get("商品类型", "")).strip()
-        channel = str(r.get("消费渠道", "")).strip()
 
-        # 更新会员数据
-        m = members[member_id]
-        m["member_id"] = member_id
-        m["card_type"] = str(r.get("卡类型", "")).strip()
-        m["total_amount"] += amount
-        m["total_count"] += 1
-        m["channels"].add(channel)
-        m["products"][product_name] += amount
+def _text(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
 
-        if product_type == "影票":
-            m["ticket_amount"] += amount
-            m["ticket_count"] += 1
-        elif product_type == "卖品":
-            m["concession_amount"] += amount
-            m["concession_count"] += 1
 
-        if m["first_time"] is None or consume_time < m["first_time"]:
-            m["first_time"] = consume_time
-        if m["last_time"] is None or consume_time > m["last_time"]:
-            m["last_time"] = consume_time
-
-    # 转换为列表并排序
-    member_list = []
-    for m in members.values():
-        avg_amount = m["total_amount"] / m["total_count"] if m["total_count"] > 0 else 0
-        member_list.append({
-            "member_id": m["member_id"],
-            "card_type": m["card_type"],
-            "total_amount": round(m["total_amount"], 2),
-            "total_count": m["total_count"],
-            "avg_amount": round(avg_amount, 2),
-            "ticket_amount": round(m["ticket_amount"], 2),
-            "ticket_count": m["ticket_count"],
-            "concession_amount": round(m["concession_amount"], 2),
-            "concession_count": m["concession_count"],
-            "first_time": m["first_time"].isoformat() if m["first_time"] else None,
-            "last_time": m["last_time"].isoformat() if m["last_time"] else None,
-            "channels": list(m["channels"]),
-            "top_products": sorted(
-                [{"name": k, "amount": round(v, 2)} for k, v in m["products"].items()],
-                key=lambda x: -x["amount"]
-            )[:5],
-        })
-
-    member_list.sort(key=lambda x: -x["total_amount"])
-
-    # 统计汇总
-    total_members = len(member_list)
-    total_amount = sum(m["total_amount"] for m in member_list)
-    total_count = sum(m["total_count"] for m in member_list)
-
-    # 消费频次分布
-    freq_dist = {"1次": 0, "2-3次": 0, "4-5次": 0, "6-10次": 0, "10次以上": 0}
-    for m in member_list:
-        c = m["total_count"]
-        if c == 1:
-            freq_dist["1次"] += 1
-        elif c <= 3:
-            freq_dist["2-3次"] += 1
-        elif c <= 5:
-            freq_dist["4-5次"] += 1
-        elif c <= 10:
-            freq_dist["6-10次"] += 1
-        else:
-            freq_dist["10次以上"] += 1
-
-    # 客单价分布
-    avg_dist = {"0-20元": 0, "20-50元": 0, "50-100元": 0, "100-200元": 0, "200元以上": 0}
-    for m in member_list:
-        a = m["avg_amount"]
-        if a < 20:
-            avg_dist["0-20元"] += 1
-        elif a < 50:
-            avg_dist["20-50元"] += 1
-        elif a < 100:
-            avg_dist["50-100元"] += 1
-        elif a < 200:
-            avg_dist["100-200元"] += 1
-        else:
-            avg_dist["200元以上"] += 1
-
-    # 渠道统计
-    channel_stats: dict[str, int] = defaultdict(int)
-    for m in member_list:
-        for ch in m["channels"]:
-            channel_stats[ch] += 1
-
-    return {
-        "status": "ok",
-        "source": path.name,
-        "summary": {
-            "total_members": total_members,
-            "total_amount": round(total_amount, 2),
-            "total_count": total_count,
-            "avg_per_member": round(total_amount / total_members, 2) if total_members > 0 else 0,
-            "avg_per_visit": round(total_amount / total_count, 2) if total_count > 0 else 0,
-        },
-        "frequency_distribution": freq_dist,
-        "avg_amount_distribution": avg_dist,
-        "channel_stats": dict(channel_stats),
-        "top_members": member_list[:20],
-        "all_members": member_list,
-    }
+def _number(value: Any) -> float:
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0

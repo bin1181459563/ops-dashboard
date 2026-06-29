@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 
 
 Platform = Literal["xiaotie", "wu_laoban", "qgcloud", "cinema", "fenghuang"]
-DataSource = Literal["api", "mock", "mixed", "none"]
+DataSource = Literal["api", "mock", "mixed", "none", "database"]
 
 
 def utc_now() -> datetime:
@@ -25,7 +25,7 @@ class UnifiedMetric(BaseModel):
 class AlertRecord(BaseModel):
     platform: Literal["xiaotie", "wu_laoban", "qgcloud", "fenghuang"]
     store_id: str = "feicuicheng"
-    alert_type: Literal["low_usage", "usage_low", "usage_drop", "revenue_drop", "token_invalid", "sync_failed", "stale_data"]
+    alert_type: Literal["low_usage", "usage_low", "usage_drop", "revenue_drop", "token_invalid", "sync_failed", "stale_data", "data_validation"]
     message: str
     level: Literal["info", "warning", "critical"] = "warning"
     time: datetime = Field(default_factory=utc_now)

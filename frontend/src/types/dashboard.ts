@@ -1,5 +1,5 @@
 export type Platform = "xiaotie" | "wu_laoban" | "cinema" | "fenghuang";
-export type DataSource = "api" | "mock" | "mixed" | "none" | "excel";
+export type DataSource = "api" | "mock" | "mixed" | "none" | "excel" | "database";
 
 export interface ApiEnvelope<T> {
   data: T;
@@ -48,7 +48,7 @@ export interface PlatformMetric {
 
 export interface CinemaOverview {
   status: "ok" | "not_imported" | "no_data" | "error";
-  data_source: "excel";
+  data_source: "database" | "excel";
   date: string | null;
   revenue: number;
   box_office: number;
@@ -72,7 +72,7 @@ export interface AlertItem {
 
 export interface SourceStatusItem {
   status: "ok" | "token_invalid" | "sync_failed" | "not_connected" | "placeholder" | "skipped" | "failed" | "not_imported" | "error";
-  data_source: "api" | "mock" | "placeholder" | "excel";
+  data_source: "api" | "mock" | "placeholder" | "excel" | "database";
   last_sync_time: string | null;
   message: string;
   token_status?: "valid" | "invalid";

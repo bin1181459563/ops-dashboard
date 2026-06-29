@@ -23,5 +23,18 @@ module.exports = {
       max_restarts: 10,
       restart_delay: 2000,
     },
+    {
+      name: 'cinema-handover-assistant',
+      cwd: '/Users/Zhuanz/Desktop/桌面整理/上影办公/cinema-handover-assistant',
+      script: 'node',
+      args: 'server.js',
+      interpreter: 'none',
+      env: {
+        PORT: '4173',
+      },
+      autorestart: true,
+      max_restarts: 10,
+      restart_delay: 2000,
+    },
   ],
 };

@@ -6,16 +6,43 @@ import { fetchConcessionDetail } from "../../lib/dashboardApi";
 import type { ConcessionDetail } from "../../lib/dashboardApi";
 import InventoryAlert from "../../components/InventoryAlert";
 
-type TabKey = "today" | "week" | "month";
+type TabKey = "today" | "week" | "month" | "year";
 
 const TAB_LABELS: Record<TabKey, string> = {
   today: "今日",
   week: "本周",
   month: "本月",
+  year: "本年",
 };
 
 // 娱乐项目类别（需要单独显示）
 const ENTERTAINMENT_CATEGORIES = ["顽小游", "顽麻社", "轰趴区"];
+
+function formatLocalDate(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function getCalendarRange(tab: TabKey) {
+  const end = new Date();
+  const start = new Date(end);
+  if (tab === "today") {
+    return { startDate: formatLocalDate(end), endDate: formatLocalDate(end) };
+  }
+  if (tab === "week") {
+    const dayOfWeek = end.getDay();
+    start.setDate(end.getDate() - dayOfWeek + (dayOfWeek === 0 ? -6 : 1));
+    return { startDate: formatLocalDate(start), endDate: formatLocalDate(end) };
+  }
+  if (tab === "year") {
+    start.setMonth(0, 1);
+    return { startDate: formatLocalDate(start), endDate: formatLocalDate(end) };
+  }
+  start.setDate(1);
+  return { startDate: formatLocalDate(start), endDate: formatLocalDate(end) };
+}
 
 export default function ConcessionPage() {
   const [data, setData] = useState<ConcessionDetail | null>(null);
@@ -30,8 +57,8 @@ export default function ConcessionPage() {
     setLoading(true);
     setError("");
     try {
-      const days = tab === "today" ? 1 : tab === "week" ? 7 : 30;
-      const result = await fetchConcessionDetail(undefined, days);
+      const { startDate, endDate } = getCalendarRange(tab);
+      const result = await fetchConcessionDetail(endDate, 366, undefined, startDate);
       if (result.status === "ok") {
         setData(result);
         setLastUpdate(new Date());
@@ -85,7 +112,7 @@ export default function ConcessionPage() {
               <div className="panelHeader">
                 <h3>📊 经营统计</h3>
                 <div className="chartControls">
-                  {(["today", "week", "month"] as TabKey[]).map((k) => (
+                  {(["today", "week", "month", "year"] as TabKey[]).map((k) => (
                     <button
                       key={k}
                       className={`chartControl ${tab === k ? "active" : ""}`}

@@ -49,6 +49,26 @@ def _parse_raw_json(raw_json: Any) -> dict:
     return {}
 
 
+def _text(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _number(value: Any) -> float:
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _first_number(item: dict[str, Any], *keys: str) -> float:
+    for key in keys:
+        if key in item:
+            return _number(item.get(key))
+    return 0.0
+
+
 def _is_in_date_range(date_str: str, start_date: str | None = None, end_date: str | None = None) -> bool:
     """检查日期是否在指定范围内"""
     if not start_date and not end_date:
@@ -106,14 +126,14 @@ def get_employee_performance(repo: DashboardRepository, start_date: str | None =
 
         # === 卖品数据（concession_items）===
         for item in raw.get("concession_items") or []:
-            operator = str(item.get("operator", "")).strip()
+            operator = _text(item.get("operator") or item.get("emp_name") or item.get("seller"))
             if not operator or operator in ("None", "--"):
                 continue
 
-            cat = str(item.get("category", "")).strip()
-            item_name = str(item.get("item_name", "")).strip()
-            quantity = float(item.get("quantity", 0) or 0)
-            revenue = float(item.get("revenue", 0) or 0)
+            cat = _text(item.get("category") or item.get("concession_category"))
+            item_name = _text(item.get("item_name") or item.get("product_name") or item.get("concession_item_name"))
+            quantity = _first_number(item, "quantity", "sale_num", "concession_quantity")
+            revenue = _first_number(item, "revenue", "pay_amount", "concession_payment")
 
             # 记录工作日期
             if snap_date:
@@ -132,7 +152,7 @@ def get_employee_performance(repo: DashboardRepository, start_date: str | None =
             operator = str(item.get("operator", "")).strip()
             if not operator or operator in ("None", "--"):
                 continue
-            amount = float(item.get("amount", 0) or 0)
+            amount = _first_number(item, "amount", "pay_amount", "recharge_amount")
             if amount > 0:
                 employee_data[operator]["recharge_count"] += 1
                 employee_data[operator]["recharge_amount"] += amount
@@ -142,7 +162,7 @@ def get_employee_performance(repo: DashboardRepository, start_date: str | None =
             operator = str(item.get("operator", "")).strip()
             if not operator or operator in ("None", "--"):
                 continue
-            amount = float(item.get("amount", 0) or 0)
+            amount = _first_number(item, "amount", "pay_amount", "recharge_amount", "open_amount")
             if amount > 0:
                 employee_data[operator]["open_count"] += 1
 

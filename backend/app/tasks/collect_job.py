@@ -1,3 +1,4 @@
+import json
 from threading import Lock
 from datetime import datetime, timedelta, timezone
 from time import perf_counter, time
@@ -29,6 +30,7 @@ class CollectionJob:
         
         try:
             results = {}
+            backfill_results = self._process_fenghuang_backfills()
             
             # 台球
             xiaotie_result = self._collect_xiaotie_yesterday(date_str)
@@ -38,19 +40,20 @@ class CollectionJob:
             wulaoban_result = self._collect_wulaoban_yesterday(date_str)
             results["wu_laoban"] = wulaoban_result
             
-            # 影院（已有逻辑）
-            fenghuang_result = self._collect_fenghuang()
+            # 影院
+            fenghuang_result = self._collect_fenghuang(date_str)
             results["fenghuang"] = fenghuang_result
+            self._enqueue_fenghuang_backfill_if_needed(date_str, fenghuang_result)
             
             self.repository.save_collection_run(
                 status="completed",
                 source="scheduled",
                 metrics_count=3,
                 excluded_count=0,
-                platform_results=list(results.values()),
+                platform_results=[*backfill_results, *list(results.values())],
             )
             
-            return {"status": "completed", "date": date_str, "results": results}
+            return {"status": "completed", "date": date_str, "results": results, "backfills": backfill_results}
         finally:
             self._lock.release()
 
@@ -408,7 +411,7 @@ class CollectionJob:
                 "message": str(exc),
             }
 
-    def _collect_fenghuang(self) -> dict[str, Any]:
+    def _collect_fenghuang(self, target_date: str | None = None) -> dict[str, Any]:
         """凤凰云智影院数据采集（特殊处理）"""
         started = datetime.now().astimezone()
         start_tick = perf_counter()
@@ -439,7 +442,7 @@ class CollectionJob:
                     ),
                 }
 
-            raw = collect_fenghuang_raw()
+            raw = collect_fenghuang_raw(target_date=target_date)
             if not raw:
                 finished = datetime.now().astimezone()
                 duration_ms = _duration_ms(start_tick)
@@ -466,6 +469,9 @@ class CollectionJob:
                 }
 
             # 保存到daily_snapshots
+            raw = self._merge_fenghuang_raw_with_existing(raw)
+            validation = _validate_fenghuang_snapshot(raw)
+            raw["validation"] = validation
             summary = raw.get("summary", {})
             self.repository.upsert_daily_snapshot_values(
                 business_type="cinema",
@@ -476,32 +482,47 @@ class CollectionJob:
                 orders=summary.get("screenings", 0),  # 场次
                 usage_rate=summary.get("occupancy_rate", 0),
                 customer_count=summary.get("customer_count", 0),
-                avg_order_value=0,
+                avg_order_value=summary.get("average_ticket_price", 0),
                 raw=raw,
             )
 
             # 保存同步日志
             finished = datetime.now().astimezone()
             duration_ms = _duration_ms(start_tick)
+            status = "success_with_warnings" if validation["status"] == "warning" else "success"
+            message = _fenghuang_validation_message(validation) if validation["status"] == "warning" else "正常"
             self.repository.save_sync_log(
                 platform="fenghuang",
                 store_id="cinema_feicuicheng",
-                status="success",
-                message="正常",
+                status=status,
+                message=message,
                 business_type="cinema",
                 started_at=started,
                 finished_at=finished,
                 duration_ms=duration_ms,
                 records_count=1,
             )
+            if validation["status"] == "warning":
+                self.repository.save_alerts(
+                    [
+                        AlertRecord(
+                            platform="fenghuang",
+                            store_id="cinema_feicuicheng",
+                            alert_type="data_validation",
+                            message=message,
+                            level="warning",
+                            time=finished,
+                        )
+                    ]
+                )
 
             return {
                 "platform_result": _platform_result(
                     platform="fenghuang",
                     business_type="cinema",
-                    status="success",
+                    status=status,
                     duration_ms=duration_ms,
-                    message="正常",
+                    message=message,
                     retry_meta={"retried": False, "retry_count": 0},
                     records_count=1,
                 ),
@@ -550,6 +571,147 @@ class CollectionJob:
                     records_count=0,
                 ),
             }
+
+    def _process_fenghuang_backfills(self) -> list[dict[str, Any]]:
+        results: list[dict[str, Any]] = []
+        due_items = self.repository.due_collection_backfills(platform="fenghuang", limit=5)
+        for item in due_items:
+            result = self._collect_fenghuang(item["target_date"])
+            platform_result = result.get("platform_result", result)
+            status = platform_result.get("status")
+            results.append({
+                **platform_result,
+                "target_date": item["target_date"],
+                "backfill": True,
+            })
+            if status in {"success", "success_with_warnings"}:
+                self.repository.mark_collection_backfill_succeeded(item["id"])
+            else:
+                self.repository.mark_collection_backfill_failed(
+                    item["id"],
+                    message=platform_result.get("message") or "补采失败",
+                    max_attempts=3,
+                )
+        return results
+
+    def _enqueue_fenghuang_backfill_if_needed(self, target_date: str, result: dict[str, Any]) -> None:
+        platform_result = result.get("platform_result", result)
+        status = platform_result.get("status")
+        if status not in {"failed", "token_invalid"}:
+            return
+        self.repository.enqueue_collection_backfill(
+            platform="fenghuang",
+            business_type="cinema",
+            store_id="cinema_feicuicheng",
+            target_date=target_date,
+            message=platform_result.get("message"),
+        )
+
+    def _merge_fenghuang_raw_with_existing(self, incoming_raw: dict[str, Any]) -> dict[str, Any]:
+        """Merge API collection with existing same-day snapshot without erasing data API does not collect."""
+        snapshot_date = incoming_raw.get("date", "")
+        existing = self.repository.daily_snapshot_for_date(
+            "cinema",
+            "fenghuang",
+            "cinema_feicuicheng",
+            snapshot_date,
+        )
+        if not existing:
+            return incoming_raw
+
+        existing_raw = _load_raw_json(existing.get("raw_json"))
+        existing_summary = existing_raw.get("summary", {})
+        incoming_summary = incoming_raw.get("summary", {})
+        merged = {
+            **existing_raw,
+            **incoming_raw,
+            "summary": {
+                **existing_summary,
+                **incoming_summary,
+            },
+        }
+
+        for key in ("member_items", "rows"):
+            if key in existing_raw and key not in incoming_raw:
+                merged[key] = existing_raw[key]
+
+        for key in ("films", "concession_items", "member_open_card_items", "member_recharge_items", "inventory_items"):
+            if key in incoming_raw:
+                merged[key] = incoming_raw[key]
+            elif key in existing_raw:
+                merged[key] = existing_raw[key]
+
+        imported_reports = [
+            *(existing_raw.get("imported_reports") or []),
+            existing_raw.get("file_name"),
+            "fenghuang_api",
+        ]
+        merged["imported_reports"] = sorted({item for item in imported_reports if item})
+        return merged
+
+
+def _load_raw_json(raw_json: Any) -> dict[str, Any]:
+    if isinstance(raw_json, dict):
+        return raw_json
+    if isinstance(raw_json, str):
+        try:
+            loaded = json.loads(raw_json)
+        except json.JSONDecodeError:
+            return {}
+        return loaded if isinstance(loaded, dict) else {}
+    return {}
+
+
+def _validate_fenghuang_snapshot(raw: dict[str, Any], tolerance: float = 0.02) -> dict[str, Any]:
+    summary = raw.get("summary") or {}
+    checks = [
+        ("box_office", "films", ("box_office", "film_box_office")),
+        ("concession_revenue", "concession_items", ("pay_amount", "revenue", "concession_payment")),
+        ("member_consume", "member_items", ("amount",)),
+        ("member_recharge_total", "member_recharge_items", ("amount", "recharge_amount")),
+    ]
+    issues = []
+    for field, items_key, amount_keys in checks:
+        if field not in summary:
+            continue
+        summary_total = _number(summary.get(field))
+        detail_total = _sum_item_amounts(raw.get(items_key) or [], amount_keys)
+        diff = round(summary_total - detail_total, 2)
+        if abs(diff) > tolerance:
+            issues.append({
+                "field": field,
+                "items_key": items_key,
+                "summary_total": round(summary_total, 2),
+                "detail_total": round(detail_total, 2),
+                "diff": diff,
+            })
+    return {"status": "warning" if issues else "ok", "issues": issues}
+
+
+def _sum_item_amounts(items: list[dict[str, Any]], amount_keys: tuple[str, ...]) -> float:
+    total = 0.0
+    for item in items:
+        for key in amount_keys:
+            if key in item:
+                total += _number(item.get(key))
+                break
+    return round(total, 2)
+
+
+def _number(value: Any) -> float:
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _fenghuang_validation_message(validation: dict[str, Any]) -> str:
+    parts = []
+    for issue in validation.get("issues") or []:
+        parts.append(
+            f"{issue['field']} 汇总 {issue['summary_total']} 元，明细 {issue['detail_total']} 元，差额 {issue['diff']} 元"
+        )
+    return "数据校验警告：" + "；".join(parts)
 
 
 def _duration_ms(start_tick: float) -> int:

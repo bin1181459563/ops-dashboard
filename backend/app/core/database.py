@@ -77,6 +77,21 @@ class DashboardRepository:
                     platform_results_json TEXT NOT NULL,
                     created_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS collection_backfills (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    platform TEXT NOT NULL,
+                    business_type TEXT NOT NULL,
+                    store_id TEXT NOT NULL,
+                    target_date TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    message TEXT,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    next_retry_at TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_collection_backfills_unique
+                ON collection_backfills (platform, business_type, store_id, target_date);
                 CREATE TABLE IF NOT EXISTS daily_snapshots (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     business_type TEXT NOT NULL,
@@ -323,6 +338,107 @@ class DashboardRepository:
                 item["platform_results"] = []
             runs.append(item)
         return runs
+
+    def enqueue_collection_backfill(
+        self,
+        *,
+        platform: str,
+        business_type: str,
+        store_id: str,
+        target_date: str,
+        message: str | None = None,
+        next_retry_at: datetime | None = None,
+    ) -> None:
+        now = datetime.now().astimezone().isoformat()
+        retry_at = (next_retry_at or datetime.now().astimezone()).isoformat()
+        with self.connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO collection_backfills
+                    (platform, business_type, store_id, target_date, status, message, attempts, next_retry_at, created_at, updated_at)
+                VALUES (?, ?, ?, ?, 'pending', ?, 0, ?, ?, ?)
+                ON CONFLICT(platform, business_type, store_id, target_date)
+                DO UPDATE SET
+                    status = CASE
+                        WHEN collection_backfills.status = 'succeeded' THEN collection_backfills.status
+                        ELSE 'pending'
+                    END,
+                    message = excluded.message,
+                    next_retry_at = CASE
+                        WHEN collection_backfills.status = 'succeeded' THEN collection_backfills.next_retry_at
+                        ELSE excluded.next_retry_at
+                    END,
+                    updated_at = excluded.updated_at
+                """,
+                (platform, business_type, store_id, target_date, message, retry_at, now, now),
+            )
+
+    def due_collection_backfills(
+        self,
+        *,
+        platform: str | None = None,
+        now: datetime | None = None,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        cutoff = (now or datetime.now().astimezone()).isoformat()
+        platform_filter = "AND platform = ?" if platform else ""
+        query = f"""
+            SELECT id, platform, business_type, store_id, target_date, status, message,
+                   attempts, next_retry_at, created_at, updated_at
+            FROM collection_backfills
+            WHERE status = 'pending'
+              AND (next_retry_at IS NULL OR next_retry_at <= ?)
+              {platform_filter}
+            ORDER BY target_date ASC, updated_at ASC, id ASC
+            LIMIT ?
+        """
+        params: tuple[Any, ...] = (cutoff, platform, limit) if platform else (cutoff, limit)
+        with self.connect() as conn:
+            rows = conn.execute(query, params).fetchall()
+        return [dict(row) for row in rows]
+
+    def mark_collection_backfill_succeeded(self, backfill_id: int, *, now: datetime | None = None) -> None:
+        updated_at = (now or datetime.now().astimezone()).isoformat()
+        with self.connect() as conn:
+            conn.execute(
+                """
+                UPDATE collection_backfills
+                SET status = 'succeeded',
+                    message = '补采成功',
+                    next_retry_at = NULL,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (updated_at, backfill_id),
+            )
+
+    def mark_collection_backfill_failed(
+        self,
+        backfill_id: int,
+        *,
+        message: str,
+        now: datetime | None = None,
+        next_retry_at: datetime | None = None,
+        max_attempts: int = 3,
+    ) -> None:
+        updated_at_dt = now or datetime.now().astimezone()
+        retry_at = next_retry_at or (updated_at_dt + timedelta(hours=1))
+        with self.connect() as conn:
+            conn.execute(
+                """
+                UPDATE collection_backfills
+                SET attempts = attempts + 1,
+                    status = CASE
+                        WHEN attempts + 1 >= ? THEN 'dead'
+                        ELSE 'pending'
+                    END,
+                    message = ?,
+                    next_retry_at = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (max_attempts, message, retry_at.isoformat(), updated_at_dt.isoformat(), backfill_id),
+            )
 
     def last_successful_sync_time(self, platform: str) -> str | None:
         query = """

@@ -61,6 +61,12 @@ export default function MemberAnalysisPage() {
 
         {error && <div className="errorBanner">{error}</div>}
 
+        {data?.data_gaps?.length ? (
+          <div className="errorBanner" style={{ background: "#fff7ed", borderColor: "#fed7aa", color: "#9a3412" }}>
+            数据缺口：{data.data_gaps.join("、")}
+          </div>
+        ) : null}
+
         {data && data.status === "ok" && (
           <>
             {/* 概览指标 */}

@@ -20,13 +20,20 @@ def _now_beijing() -> datetime:
 def _calc_freshness(last_update: str | None, data_source: str = "api") -> dict[str, Any]:
     """
     计算数据新鲜度
-    data_source: "api" (实时API) 或 "excel_upload" (Excel导入)
+    data_source: "api" (实时API), "excel_upload" (Excel导入) 或 "database" (数据库快照)
     返回: {"freshness": "fresh|delayed|stale|pending", "label": "...", "minutes_ago": int|None, "note": "..."}
     """
     now = _now_beijing()
     today_str = now.strftime("%Y-%m-%d")
     
     if not last_update:
+        if data_source == "database":
+            return {
+                "freshness": "missing",
+                "label": "无快照",
+                "minutes_ago": None,
+                "note": "数据库中暂无影院经营快照"
+            }
         if data_source == "excel_upload":
             return {
                 "freshness": "pending",
@@ -46,32 +53,32 @@ def _calc_freshness(last_update: str | None, data_source: str = "api") -> dict[s
         last_date_str = last_dt.strftime("%Y-%m-%d")
         is_today = last_date_str == today_str
         
-        # Excel导入模式的特殊逻辑
-        if data_source == "excel_upload":
+        # Excel导入和数据库快照按营业日快照判断，不按分钟级实时性判断
+        if data_source in {"excel_upload", "database"}:
+            synced_word = "同步" if data_source == "database" else "导入"
+            data_word = "快照" if data_source == "database" else "数据"
             if is_today:
-                # 今天已导入，状态正常
                 return {
                     "freshness": "fresh",
-                    "label": "今日已导入",
+                    "label": f"今日已{synced_word}",
                     "minutes_ago": minutes_ago,
-                    "note": f"数据范围包含今日({today_str})"
+                    "note": f"数据库{data_word}包含今日({today_str})" if data_source == "database" else f"数据范围包含今日({today_str})"
                 }
             else:
-                # 今天未导入，但昨天有数据
                 days_ago = (now.date() - last_dt.date()).days
                 if days_ago == 1:
                     return {
                         "freshness": "delayed",
-                        "label": "昨日数据",
+                        "label": "昨日快照" if data_source == "database" else "昨日数据",
                         "minutes_ago": minutes_ago,
-                        "note": f"最后导入日期: {last_date_str}，今日({today_str})尚未导入"
+                        "note": f"最后同步日期: {last_date_str}，今日({today_str})暂无快照" if data_source == "database" else f"最后导入日期: {last_date_str}，今日({today_str})尚未导入"
                     }
                 else:
                     return {
                         "freshness": "stale",
                         "label": f"{days_ago}天前",
                         "minutes_ago": minutes_ago,
-                        "note": f"最后导入日期: {last_date_str}，已过{days_ago}天"
+                        "note": f"最后同步日期: {last_date_str}，已过{days_ago}天" if data_source == "database" else f"最后导入日期: {last_date_str}，已过{days_ago}天"
                     }
         
         # 实时API模式的逻辑
@@ -95,6 +102,9 @@ def _determine_status(token_valid: bool, freshness: str, sync_status: str | None
 
     if sync_status == "failed":
         return {"status": "error", "status_label": "同步失败"}
+
+    if freshness == "missing":
+        return {"status": "warning", "status_label": "暂无数据"}
 
     # pending状态：今日未导入，但不算异常
     if freshness == "pending":
@@ -129,9 +139,9 @@ def check_cinema_data_quality(repository: DashboardRepository) -> dict[str, Any]
     sync_status = sync_log["status"] if sync_log else None
     sync_message = sync_log["message"] if sync_log else None
 
-    # 影院数据是Excel导入模式
-    freshness_info = _calc_freshness(last_update, data_source="excel_upload")
-    # 影院数据通过Excel上传，不依赖token，假设token总是有效
+    # 影院详情页以数据库快照为准，Excel 仅作为历史补录入口
+    freshness_info = _calc_freshness(last_update, data_source="database")
+    # 影院数据库快照不依赖前端 token 状态
     status_info = _determine_status(
         token_valid=True,
         freshness=freshness_info["freshness"],
@@ -142,7 +152,7 @@ def check_cinema_data_quality(repository: DashboardRepository) -> dict[str, Any]
         "platform": "cinema",
         "business_type": "cinema",
         "name": "凤凰云智(影院)",
-        "data_source": "excel_upload",
+        "data_source": "database",
         "last_update": last_update,
         "snapshot_date": snapshot_date,
         "freshness": freshness_info["freshness"],

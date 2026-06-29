@@ -35,10 +35,8 @@ def overview(request: Request) -> ApiEnvelope:
     total_orders = sum(platforms[platform].get("orders", 0) for platform in included_platforms)
     sources = [platforms[platform].get("source", "api") for platform in included_platforms]
     
-    # 影院数据现在通过API实时采集，可以直接显示今日数据
-    from datetime import date
-    today = date.today().isoformat()
-    cinema = cinema_overview(repository, target_date=today)
+    # 影院以数据库营业日快照为准，取截至今天的最新可用快照
+    cinema = cinema_overview(repository)
     
     if cinema["status"] == "ok":
         total_revenue += cinema.get("revenue", 0)
@@ -47,7 +45,7 @@ def overview(request: Request) -> ApiEnvelope:
             included_platforms.append("cinema")
         if "cinema" in excluded_platforms:
             excluded_platforms.remove("cinema")
-        sources.append("api")
+        sources.append("database")
 
     return ApiEnvelope(
         data={
@@ -131,7 +129,7 @@ def _source_status(repository, platforms: dict) -> dict:
         },
         "cinema": {
             "status": cinema["status"],
-            "data_source": "excel",
+            "data_source": "database",
             "last_sync_time": cinema.get("last_import_time"),
             "message": cinema["message"],
         },

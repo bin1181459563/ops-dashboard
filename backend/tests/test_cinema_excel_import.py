@@ -3,6 +3,7 @@ from datetime import date
 from fastapi.testclient import TestClient
 
 from app.main import create_app
+from app.models.schemas import UnifiedMetric
 
 
 def _upload_csv(client: TestClient, content: str, filename: str = "fenghuang.csv"):
@@ -213,7 +214,8 @@ def test_cinema_overview_detail_and_data_source_status(tmp_path):
 
     not_imported = client.get("/api/cinema/overview").json()
     assert not_imported["status"] == "not_imported"
-    assert not_imported["message"] == "请先上传凤凰云智 Excel 报表"
+    assert not_imported["data_source"] == "database"
+    assert not_imported["message"] == "暂无影院数据库快照"
 
     _upload_csv(
         client,
@@ -232,7 +234,7 @@ def test_cinema_overview_detail_and_data_source_status(tmp_path):
     report = client.get("/api/ai/daily-report").json()["data"]["report"]
 
     assert overview["status"] == "ok"
-    assert overview["data_source"] == "excel"
+    assert overview["data_source"] == "database"
     assert overview["box_office"] == 1200
     assert overview["concession_revenue"] == 300
     assert overview["revenue"] == 1500
@@ -251,10 +253,269 @@ def test_cinema_overview_detail_and_data_source_status(tmp_path):
 
     cinema_status = next(item for item in data_sources if item["platform"] == "fenghuang")
     assert cinema_status["status"] == "ok"
-    assert cinema_status["data_source"] == "excel"
-    assert cinema_status["message"] == "凤凰云智 Excel 已导入"
+    assert cinema_status["data_source"] == "database"
+    assert cinema_status["message"] == "已从数据库读取凤凰云智经营数据"
     assert "影院：收入 ¥1500" in report
     assert "影院 未接入" not in report
+
+
+def test_cinema_detail_accepts_legacy_film_metric_fields(tmp_path):
+    app = create_app(db_path=tmp_path / "ops_dashboard.db", start_scheduler=False)
+    client = TestClient(app)
+    repo = app.state.repository
+    repo.upsert_daily_snapshot(
+        "cinema",
+        UnifiedMetric(
+            platform="fenghuang",
+            store_id="cinema_feicuicheng",
+            revenue=1500,
+            orders=2,
+            usage_rate=0.2,
+            time=date.fromisoformat("2026-06-20"),
+        ),
+        raw={
+            "summary": {
+                "box_office": 1200,
+                "concession_revenue": 300,
+                "customer_count": 80,
+                "screenings": 2,
+                "occupancy_rate": 0.2,
+            },
+            "films": [
+                {"film_name": "哪吒", "box_office": 700, "audience": 45},
+                {"film_name": "流浪地球", "box_office": 500, "audience": 35},
+            ],
+        },
+        customer_count=80,
+        avg_order_value=15,
+    )
+
+    response = client.get("/api/cinema/detail?date=2026-06-20")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["film_box_office_ranking"][0]["film_name"] == "哪吒"
+    assert body["film_box_office_ranking"][0]["film_box_office"] == 700
+    assert body["film_attendance_ranking"][0]["film_attendance"] == 45
+
+
+def test_cinema_detail_aggregates_film_ranking_by_film_name(tmp_path):
+    app = create_app(db_path=tmp_path / "ops_dashboard.db", start_scheduler=False)
+    client = TestClient(app)
+    repo = app.state.repository
+    repo.upsert_daily_snapshot(
+        "cinema",
+        UnifiedMetric(
+            platform="fenghuang",
+            store_id="cinema_feicuicheng",
+            revenue=1500,
+            orders=3,
+            usage_rate=0.2,
+            time=date.fromisoformat("2026-06-20"),
+        ),
+        raw={
+            "summary": {
+                "box_office": 1200,
+                "concession_revenue": 300,
+                "customer_count": 80,
+                "screenings": 3,
+                "occupancy_rate": 0.2,
+            },
+            "films": [
+                {"film_name": "玩具总动员5", "box_office": 390, "audience": 13},
+                {"film_name": "玩具总动员5", "box_office": 362, "audience": 12},
+                {"film_name": "三国第一部：争洛阳", "box_office": 512, "audience": 17},
+            ],
+        },
+        customer_count=80,
+        avg_order_value=15,
+    )
+
+    response = client.get("/api/cinema/detail?date=2026-06-20")
+
+    assert response.status_code == 200
+    body = response.json()
+    box_ranking = body["film_box_office_ranking"]
+    attendance_ranking = body["film_attendance_ranking"]
+    assert [item["film_name"] for item in box_ranking] == ["玩具总动员5", "三国第一部：争洛阳"]
+    assert box_ranking[0]["film_box_office"] == 752
+    assert attendance_ranking[0]["film_name"] == "玩具总动员5"
+    assert attendance_ranking[0]["film_attendance"] == 25
+
+
+def test_member_analysis_reads_daily_snapshots_and_reports_missing_member_consumption(tmp_path):
+    app = create_app(db_path=tmp_path / "ops_dashboard.db", start_scheduler=False)
+    client = TestClient(app)
+    repo = app.state.repository
+    repo.upsert_daily_snapshot(
+        "cinema",
+        UnifiedMetric(
+            platform="fenghuang",
+            store_id="cinema_feicuicheng",
+            revenue=1000,
+            orders=10,
+            usage_rate=0.1,
+            time=date.fromisoformat("2026-06-20"),
+        ),
+        raw={
+            "summary": {"member_consume": 0},
+            "member_recharge_items": [
+                {"card_no": "20001", "card_type": "储值卡", "amount": 400, "operator": "刘柯鑫"}
+            ],
+            "member_open_card_items": [
+                {"card_no": "20001", "card_type": "储值卡", "pay_amount": 10, "recharge_amount": 400, "operator": "刘柯鑫"}
+            ],
+        },
+        customer_count=10,
+        avg_order_value=100,
+    )
+
+    response = client.get("/api/cinema/member-analysis?days=30")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["source"] == "daily_snapshots"
+    assert body["summary"]["total_members"] == 1
+    assert body["summary"]["total_recharge_amount"] == 400
+    assert body["summary"]["open_card_count"] == 1
+    assert "会员消费明细缺失" in body["data_gaps"]
+
+
+def test_concession_recommendations_read_daily_snapshots(tmp_path):
+    app = create_app(db_path=tmp_path / "ops_dashboard.db", start_scheduler=False)
+    client = TestClient(app)
+    repo = app.state.repository
+    repo.upsert_daily_snapshot(
+        "cinema",
+        UnifiedMetric(
+            platform="fenghuang",
+            store_id="cinema_feicuicheng",
+            revenue=500,
+            orders=10,
+            usage_rate=0.1,
+            time=date.fromisoformat("2026-06-20"),
+        ),
+        raw={
+            "concession_items": [
+                {"item_name": "单人套餐", "category": "卖品套餐", "quantity": 2, "revenue": 84, "operator": "刘柯鑫"},
+                {"item_name": "85oz爆米花", "category": "爆米花", "quantity": 3, "revenue": 126, "operator": "刘柯鑫"},
+                {"item_name": "可乐", "category": "饮料", "quantity": 3, "revenue": 45, "operator": "刘柯鑫"},
+            ],
+        },
+        customer_count=10,
+        avg_order_value=50,
+    )
+
+    response = client.get("/api/concession/recommendations")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "ok"
+    assert body["source"] == "daily_snapshots"
+    assert body["summary"]["total_items"] == 8
+    assert body["category_breakdown"][0]["category"] == "爆米花"
+
+
+def test_concession_detail_accepts_database_sale_alias_fields(tmp_path):
+    app = create_app(db_path=tmp_path / "ops_dashboard.db", start_scheduler=False)
+    client = TestClient(app)
+    repo = app.state.repository
+    repo.upsert_daily_snapshot(
+        "cinema",
+        UnifiedMetric(
+            platform="fenghuang",
+            store_id="cinema_feicuicheng",
+            revenue=1500,
+            orders=10,
+            usage_rate=0.1,
+            time=date.fromisoformat("2026-06-28"),
+        ),
+        raw={
+            "summary": {"concession_revenue": 119},
+            "concession_items": [
+                {"item_name": "单人套餐", "category": "卖品套餐", "sale_num": 2, "pay_amount": 84, "emp_name": "刘柯鑫"},
+                {"item_name": "35暑期套餐", "category": "活动", "sale_num": 1, "pay_amount": 35, "emp_name": "刘柯鑫"},
+            ],
+        },
+        customer_count=10,
+        avg_order_value=150,
+    )
+
+    response = client.get("/api/cinema/concession?date=2026-06-28&days=1")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["summary"]["total_revenue"] == 119
+    assert body["summary"]["total_quantity"] == 3
+    assert body["categories"][0]["category"] == "卖品套餐"
+    assert body["categories"][0]["revenue"] == 84
+    assert body["items"][0]["item_name"] == "单人套餐"
+    assert body["items"][0]["quantity"] == 2
+
+
+def test_employee_performance_accepts_database_sale_alias_fields(tmp_path):
+    app = create_app(db_path=tmp_path / "ops_dashboard.db", start_scheduler=False)
+    client = TestClient(app)
+    repo = app.state.repository
+    repo.upsert_daily_snapshot(
+        "cinema",
+        UnifiedMetric(
+            platform="fenghuang",
+            store_id="cinema_feicuicheng",
+            revenue=1500,
+            orders=10,
+            usage_rate=0.1,
+            time=date.fromisoformat("2026-06-28"),
+        ),
+        raw={
+            "concession_items": [
+                {"item_name": "单人套餐", "category": "卖品套餐", "sale_num": 2, "pay_amount": 84, "emp_name": "刘柯鑫"},
+                {"item_name": "35暑期套餐", "category": "活动", "sale_num": 1, "pay_amount": 35, "emp_name": "刘柯鑫"},
+            ],
+            "member_recharge_items": [
+                {"operator": "刘柯鑫", "pay_amount": 200},
+            ],
+            "member_open_card_items": [
+                {"operator": "刘柯鑫", "pay_amount": 10, "recharge_amount": 400},
+            ],
+        },
+        customer_count=10,
+        avg_order_value=150,
+    )
+
+    response = client.get("/api/cinema/employee-performance?start_date=2026-06-28&end_date=2026-06-28")
+
+    assert response.status_code == 200
+    body = response.json()
+    employee = next(item for item in body["employees"] if item["name"] == "刘柯鑫")
+    assert employee["package_count"] == 2
+    assert employee["package_amount"] == 84
+    assert employee["activity_count"] == 1
+    assert employee["activity_amount"] == 35
+    assert employee["recharge_amount"] == 200
+    assert employee["open_count"] == 1
+
+
+def test_concession_detail_preserves_rows_when_one_order_has_mixed_categories(tmp_path):
+    app = create_app(db_path=tmp_path / "ops_dashboard.db", start_scheduler=False)
+    client = TestClient(app)
+    csv_content = "\n".join(
+        [
+            "销售日期,影院,订单号,卖品大类,一级分类,卖品名称,销售数量,支付金额（元）,销售员",
+            "2026-06-20,SFC上影国际影城翡翠城店,ORD-1,顽小游,娱乐,游戏币,1,100,刘柯鑫",
+            "2026-06-20,SFC上影国际影城翡翠城店,ORD-1,卖品套餐,饮食,单人套餐,1,42,刘柯鑫",
+        ]
+    )
+
+    response = _upload_csv(client, csv_content, "卖品销售明细2026-06-20.csv")
+
+    assert response.status_code == 200
+    detail = client.get("/api/cinema/concession?date=2026-06-20&days=1").json()
+    assert detail["summary"]["total_revenue"] == 42
+    assert detail["summary"]["total_quantity"] == 1
+    assert detail["categories"] == [{"category": "卖品套餐", "quantity": 1, "revenue": 42.0, "items": 1}]
+    assert detail["items"][0]["item_name"] == "单人套餐"
 
 
 def test_main_overview_counts_imported_cinema_revenue(tmp_path, monkeypatch):
@@ -366,9 +627,9 @@ def test_cinema_selected_date_without_snapshot_returns_no_data(tmp_path):
 
     assert overview["status"] == "no_data"
     assert overview["date"] == "2026-06-18"
-    assert overview["message"] == "所选日期暂无影院导入数据"
+    assert overview["message"] == "所选日期暂无影院数据"
     assert detail["status"] == "no_data"
-    assert detail["message"] == "所选日期暂无影院导入数据"
+    assert detail["message"] == "所选日期暂无影院数据"
 
 
 def test_cinema_batch_import_sorts_reports_and_preserves_operations_summary(tmp_path):

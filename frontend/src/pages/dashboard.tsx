@@ -260,14 +260,15 @@ export default function DashboardPage() {
           <nav className="navStack">
             {[
               ["今日经营中心", "/dashboard", "今", true],
-              ["AI 预警", "/dashboard/alerts", "预", false],
               ["AI 报告", "/dashboard/reports", "报", false],
+              ["每日简报", "/dashboard/daily-briefing", "简", false],
+              ["交接助手", "/dashboard/handover-assistant", "交", false],
+              ["采购报销", "/dashboard/procurement-reimbursement", "采", false],
               ["客户唤醒", "/dashboard/customer-wake-up", "客", false],
               ["排片建议", "/dashboard/screening-suggestions", "排", false],
               ["收入预测", "/dashboard/revenue-forecast", "收", false],
               ["多业务联动", "/dashboard/cross-business", "联", false],
               ["数据可信度", "/dashboard/data-quality", "数", false],
-              ["审计日志", "/dashboard/audit", "审", false],
             ].map(([label, href, icon, active]) => (
               <Link className={`navItem ${active ? "active" : ""}`} href={String(href)} key={String(label)}>
                 <span>{icon}</span>
@@ -445,7 +446,7 @@ function CinemaPrimeCard({
       <div className="primeMetrics">
         <MetricBlock label="票房（流量）" title="票房收入" value={currency(ticket)} note={card.dataNote} tone="blue" />
         <MetricBlock label="卖品（利润核心）" title="卖品收入" value={currency(concession)} note={card.dataNote} tone="green" />
-        <MetricBlock label="客单价" title="客单价" value={`¥${(card.avgOrderValue || (customers > 0 ? (ticket + concession) / customers : 0)).toFixed(2)}`} note={card.dataNote} />
+        <MetricBlock label="客单价" title="客单价" value={`¥${(card.avgOrderValue || (customers > 0 ? ticket / customers : 0)).toFixed(2)}`} note={card.dataNote} />
         <MetricBlock label="人次" title="人次" value={formatNumber(customers)} note={card.dataNote} />
       </div>
       <div className="cinemaBottomRow">
@@ -652,7 +653,6 @@ function ProblemCard({ alerts, total }: { alerts: BusinessAlert[]; total: number
           <span className="alertIcon">△</span>
           <strong>Top 3 问题</strong>
         </div>
-        {total > 3 && <Link href="/dashboard/alerts">查看全部</Link>}
       </div>
       <div className="rankList">
         {alerts.map((item, index) => (

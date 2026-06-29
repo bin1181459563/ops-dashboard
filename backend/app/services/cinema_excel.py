@@ -12,14 +12,19 @@ PLATFORM = "fenghuang"
 BUSINESS_TYPE = "cinema"
 STORE_ID = "cinema_feicuicheng"
 STORE_NAME = "SFC上影国际影城翡翠城店"
+DISPLAY_DATA_SOURCE = "database"
+DATABASE_READY_MESSAGE = "已从数据库读取凤凰云智经营数据"
+DATABASE_EMPTY_MESSAGE = "暂无影院数据库快照"
+DATABASE_NO_DATE_MESSAGE = "所选日期暂无影院数据"
+DATABASE_SYNC_ERROR_MESSAGE = "最近同步失败"
 
 # 娱乐项目排除列表（与 concession.py 保持一致）
 _EXCLUDED_CATEGORIES = {"顽小游", "小铁台球", "顽麻社", "娱乐"}
 
 def _is_entertainment(item: dict) -> bool:
-    """判断卖品明细是否属于娱乐项目"""
-    cat = (item.get("category") or "").strip()
-    name = (item.get("item_name") or item.get("product_name") or "").strip()
+    """判断卖品明细是否属于娱乐项目（兼容 concession_items 和 rows 两种字段格式）"""
+    cat = (item.get("category") or item.get("concession_category") or "").strip()
+    name = (item.get("item_name") or item.get("product_name") or item.get("concession_item_name") or "").strip()
     if cat in _EXCLUDED_CATEGORIES:
         return True
     for kw in ("顽小游", "小铁台球", "顽麻社"):
@@ -30,23 +35,39 @@ def _is_entertainment(item: dict) -> bool:
 def _filtered_concession_revenue(raw: dict) -> float:
     """从原始数据中计算排除娱乐项后的卖品收入
     
-    优先使用 summary 中的汇总数值（来自营运综合表，数据完整），
-    减去被排除的娱乐项金额。当 items 不完整时（总额 < summary），
-    直接返回 summary（无法可靠过滤，需要导入卖品销售明细表）。
+    优先使用 concession_items（按订单聚合的明细），覆盖95%以上时直接过滤。
+    当 concession_items 不完整时（按订单聚合可能把娱乐项合并到普通商品），
+    用 rows（原始Excel行）计算娱乐项金额并从 summary 中扣除。
     """
     items = raw.get("concession_items") or []
     summary_total = raw.get("summary", {}).get("concession_revenue", 0)
     if not items:
-        # 没有明细数据时，返回原始汇总值（无法过滤）
-        return summary_total
+        # 没有明细数据时，尝试用 rows 过滤
+        return _fallback_filter_by_rows(raw, summary_total)
     # 计算排除项总金额（兼容 revenue 和 pay_amount 两种字段名）
     excluded_sum = sum(item.get("revenue") or item.get("pay_amount", 0) for item in items if _is_entertainment(item))
     items_total = sum(item.get("revenue") or item.get("pay_amount", 0) for item in items)
     # items 完整时（覆盖95%以上），直接用 items 过滤
     if summary_total > 0 and items_total >= summary_total * 0.95:
         return round(items_total - excluded_sum, 2)
-    # items 不完整时，直接返回 summary（无法可靠过滤）
-    # 需要导入卖品销售明细表才能正确排除娱乐项
+    # items 不完整时（按订单聚合可能导致娱乐项被合并），
+    # 用 rows（原始Excel行）计算娱乐项金额并从 summary 中扣除
+    return _fallback_filter_by_rows(raw, summary_total)
+
+
+def _fallback_filter_by_rows(raw: dict, summary_total: float) -> float:
+    """用原始 rows 数据计算娱乐项金额，从 summary 中扣除"""
+    rows = raw.get("rows") or []
+    if not rows or summary_total <= 0:
+        return summary_total
+    # 用 concession_payment 字段计算娱乐项总额（rows 是原始Excel行格式）
+    rows_excluded = sum(
+        float(row.get("concession_payment", 0) or 0)
+        for row in rows
+        if _is_entertainment(row)
+    )
+    if rows_excluded > 0:
+        return round(summary_total - rows_excluded, 2)
     return summary_total
 
 CANONICAL_LABELS = {
@@ -321,15 +342,15 @@ def cinema_overview(repository: Any, target_date: str | None = None, days: int =
     if latest_log and latest_log.get("status") == "failed" and not snapshot:
         return _empty_overview(
             "error",
-            "最近导入失败",
+            DATABASE_SYNC_ERROR_MESSAGE,
             target_date=target_date,
             last_import_time=latest_log.get("finished_at") or latest_log.get("started_at"),
         )
     if not snapshot:
         has_any_snapshot = repository.latest_daily_snapshot_for(BUSINESS_TYPE, PLATFORM, STORE_ID)
         if target_date and has_any_snapshot:
-            return _empty_overview("no_data", "所选日期暂无影院导入数据", target_date=target_date)
-        return _empty_overview("not_imported", "请先上传凤凰云智 Excel 报表", target_date=target_date)
+            return _empty_overview("no_data", DATABASE_NO_DATE_MESSAGE, target_date=target_date)
+        return _empty_overview("not_imported", DATABASE_EMPTY_MESSAGE, target_date=target_date)
 
     # 范围模式：聚合数据（支持 start_date 或 days）
     if start_date or days > 1:
@@ -347,11 +368,11 @@ def cinema_overview(repository: Any, target_date: str | None = None, days: int =
             total_customer += s.get("customer_count", 0) or 0
             total_screenings += s.get("orders", 0) or 0
         total_revenue = round(total_box + total_concession, 2)
-        avg_order = round(total_revenue / total_customer, 2) if total_customer else 0
+        avg_order = round(total_box / total_customer, 2) if total_customer else 0
         latest_import_time = _latest_success_time(repository)
         return {
             "status": "ok",
-            "data_source": "excel",
+            "data_source": DISPLAY_DATA_SOURCE,
             "date": f"{snapshots[0]['date']}~{snapshots[-1]['date']}" if snapshots else snapshot["date"],
             "revenue": total_revenue,
             "box_office": round(total_box, 2),
@@ -361,25 +382,27 @@ def cinema_overview(repository: Any, target_date: str | None = None, days: int =
             "occupancy_rate": 0,
             "avg_order_value": avg_order,
             "last_import_time": latest_import_time or snapshot["created_at"],
-            "message": "凤凰云智 Excel 已导入",
+            "message": DATABASE_READY_MESSAGE,
         }
 
     raw = _load_raw(snapshot)
     latest_import_time = _latest_success_time(repository)
     filtered_concession = _filtered_concession_revenue(raw)
+    box_office = raw.get("summary", {}).get("box_office", 0)
+    customers = snapshot["customer_count"] or 0
     return {
         "status": "ok",
-        "data_source": "excel",
+        "data_source": DISPLAY_DATA_SOURCE,
         "date": snapshot["date"],
-        "revenue": snapshot["revenue"],
-        "box_office": raw.get("summary", {}).get("box_office", 0),
+        "revenue": round(box_office + filtered_concession, 2),
+        "box_office": box_office,
         "concession_revenue": round(filtered_concession, 2),
-        "customer_count": snapshot["customer_count"],
+        "customer_count": customers,
         "screenings": raw.get("summary", {}).get("screenings", snapshot["orders"]),
         "occupancy_rate": snapshot["usage_rate"],
-        "avg_order_value": snapshot["avg_order_value"],
+        "avg_order_value": round(box_office / customers, 2) if customers else 0,
         "last_import_time": latest_import_time or snapshot["created_at"],
-        "message": "凤凰云智 Excel 已导入",
+        "message": DATABASE_READY_MESSAGE,
     }
 
 
@@ -391,13 +414,14 @@ def cinema_detail(repository: Any, target_date: str | None = None, days: int = 3
         if target_date and has_any_snapshot:
             return {
                 "status": "no_data",
-                "data_source": "excel",
+                "data_source": DISPLAY_DATA_SOURCE,
                 "date": target_date,
-                "message": "所选日期暂无影院导入数据",
+                "message": DATABASE_NO_DATE_MESSAGE,
             }
         return {
             "status": "not_imported",
-            "message": "请先上传凤凰云智 Excel 报表",
+            "data_source": DISPLAY_DATA_SOURCE,
+            "message": DATABASE_EMPTY_MESSAGE,
         }
 
     max_date = snapshot["date"] if target_date else today
@@ -422,7 +446,7 @@ def cinema_detail(repository: Any, target_date: str | None = None, days: int = 3
             total_customer += s.get("customer_count", 0) or 0
             total_screenings += s.get("orders", 0) or 0
         total_revenue = round(total_box + total_concession, 2)
-        avg_order = round(total_revenue / total_customer, 2) if total_customer else 0
+        avg_order = round(total_box / total_customer, 2) if total_customer else 0
         today_data = {
             "date": f"{snapshots_30d[-1]['date']}~{snapshots_30d[0]['date']}",
             "box_office": round(total_box, 2),
@@ -436,32 +460,21 @@ def cinema_detail(repository: Any, target_date: str | None = None, days: int = 3
     else:
         today_data = _overview_from_snapshot(snapshot, latest_raw)
 
-    # 影片数据：范围模式聚合所有日期，单日模式取当天
+    # 影片数据：按影片名聚合，避免同一影片多版本/多场次拆成多行
     if is_range_mode:
-        film_totals: dict[str, dict[str, Any]] = {}
-        for s in snapshots_30d:
-            r = _load_raw(s)
-            for f in r.get("films", []):
-                name = f.get("film_name", "")
-                if not name:
-                    continue
-                if name not in film_totals:
-                    film_totals[name] = {"film_name": name, "film_box_office": 0.0, "film_attendance": 0}
-                film_totals[name]["film_box_office"] = round(film_totals[name]["film_box_office"] + f.get("film_box_office", 0), 2)
-                film_totals[name]["film_attendance"] += f.get("film_attendance", 0)
-        films = list(film_totals.values())
+        films = _aggregate_films(snapshots_30d)
     else:
-        films = latest_raw.get("films", [])
+        films = _aggregate_film_items(latest_raw.get("films", []))
         if not films:
             for snap in reversed(snapshots_30d):
                 raw = _load_raw(snap)
                 if raw.get("films"):
-                    films = raw["films"]
+                    films = _aggregate_film_items(raw["films"])
                     break
 
     return {
         "status": "ok",
-        "data_source": "excel",
+        "data_source": DISPLAY_DATA_SOURCE,
         "today": today_data,
         "box_office_trend_7d": trend_7d,
         "box_office_trend_30d": trend_30d,
@@ -486,8 +499,35 @@ def cinema_detail(repository: Any, target_date: str | None = None, days: int = 3
             for item in imports
         ],
         "missing_fields": latest_raw.get("missing_fields", []),
-        "message": "凤凰云智 Excel 已导入",
+        "message": DATABASE_READY_MESSAGE,
     }
+
+
+def _normalize_film_metrics(films: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    normalized = []
+    for film in films:
+        name = film.get("film_name") or film.get("name")
+        if not name:
+            continue
+        normalized.append(
+            {
+                **film,
+                "film_name": name,
+                "film_box_office": film.get("film_box_office", film.get("box_office", 0)) or 0,
+                "film_attendance": film.get("film_attendance", film.get("audience", 0)) or 0,
+            }
+        )
+    return normalized
+
+
+def _aggregate_film_items(films: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    totals: dict[str, dict[str, Any]] = {}
+    for film in _normalize_film_metrics(films):
+        name = film["film_name"]
+        item = totals.setdefault(name, {"film_name": name, "film_box_office": 0.0, "film_attendance": 0})
+        item["film_box_office"] = round(item["film_box_office"] + float(film.get("film_box_office") or 0), 2)
+        item["film_attendance"] += int(film.get("film_attendance") or 0)
+    return list(totals.values())
 
 
 def cinema_status(repository: Any) -> dict[str, Any]:
@@ -500,9 +540,9 @@ def cinema_status(repository: Any) -> dict[str, Any]:
             "platform": PLATFORM,
             "business_type": BUSINESS_TYPE,
             "status": "error",
-            "data_source": "excel",
+            "data_source": DISPLAY_DATA_SOURCE,
             "last_sync_time": latest_log.get("finished_at") or latest_log.get("started_at"),
-            "message": "最近导入失败",
+            "message": DATABASE_SYNC_ERROR_MESSAGE,
             "error_reason": latest_log.get("message"),
         }
     if snapshot:
@@ -510,17 +550,17 @@ def cinema_status(repository: Any) -> dict[str, Any]:
             "platform": PLATFORM,
             "business_type": BUSINESS_TYPE,
             "status": "ok",
-            "data_source": "excel",
+            "data_source": DISPLAY_DATA_SOURCE,
             "last_sync_time": _latest_success_time(repository) or snapshot["created_at"],
-            "message": "凤凰云智 Excel 已导入",
+            "message": DATABASE_READY_MESSAGE,
         }
     return {
         "platform": PLATFORM,
         "business_type": BUSINESS_TYPE,
         "status": "not_imported",
-        "data_source": "excel",
+        "data_source": DISPLAY_DATA_SOURCE,
         "last_sync_time": None,
-        "message": "暂未导入",
+        "message": DATABASE_EMPTY_MESSAGE,
     }
 
 
@@ -610,7 +650,7 @@ def _find_header(rows: list[list[Any]]) -> tuple[int | None, dict[int, str]]:
 
 def _detect_report_type(matched_fields: set[str], filename: str) -> str:
     name = filename.lower()
-    if "影片成绩" in filename or {"film_name", "film_box_office", "film_attendance"}.issubset(matched_fields):
+    if "影片成绩" in filename:
         return "film_ranking"
     if "卖品销售" in filename or "concession_item_name" in matched_fields or "concession_category" in matched_fields:
         return "concession_detail"
@@ -626,6 +666,8 @@ def _detect_report_type(matched_fields: set[str], filename: str) -> str:
         return "member_open_card"
     if {"date", "box_office", "customer_count", "screenings"}.intersection(matched_fields):
         return "operations"
+    if {"film_name", "film_box_office", "film_attendance"}.issubset(matched_fields):
+        return "film_ranking"
     if "film" in name:
         return "film_ranking"
     return "generic"
@@ -709,7 +751,7 @@ def _build_snapshots(rows: list[dict[str, Any]], missing_fields: list[str], file
         customer_count = int(round(sum(item["film_attendance"] for item in films))) if films else int(round(_first_number(date_rows, "customer_count")))
         if not customer_count and "观影人次" in missing_fields:
             customer_count = int(round(sum(item["film_attendance"] for item in films)))
-        screenings = int(round(_sum_or_first(date_rows, "screenings", prefer_sum=True)))
+        screenings = int(round(_sum_or_first(date_rows, "screenings", prefer_sum=(report_type == "film_ranking" or not bool(films)))))
         occupancy_rate = _first_rate(date_rows, "occupancy_rate")
         # 如果没有影片票房数据但有 film_name + screenings，按场次比例拆分总票房/人次
         if not films and box_office:
@@ -733,38 +775,20 @@ def _build_snapshots(rows: list[dict[str, Any]], missing_fields: list[str], file
         # 卖品明细数据
         concession_items = []
         if report_type == "concession_detail":
-            # 按订单号分组，合并同一个订单的多条记录
-            order_groups = defaultdict(list)
             for row in date_rows:
-                order_no = _clean_cell(row.get("order_no")) or str(row.get("order_no", ""))
-                order_groups[order_no].append(row)
-            
-            for order_no, rows in order_groups.items():
-                # 取数量>0的记录作为主记录
-                main_row = None
-                total_payment = 0
-                for row in rows:
-                    quantity = int(_parse_number(row.get("concession_quantity")))
-                    payment = _parse_number(row.get("concession_payment"))
-                    total_payment += payment
-                    if quantity > 0:
-                        main_row = row
-                
-                if not main_row:
-                    main_row = rows[0]
-                
-                item_name = _clean_cell(main_row.get("concession_item_name"))
+                item_name = _clean_cell(row.get("concession_item_name"))
                 if not item_name:
                     continue
-                category = _clean_cell(main_row.get("concession_category"))
-                sub_category = _clean_cell(main_row.get("concession_sub_category"))
-                quantity = int(_parse_number(main_row.get("concession_quantity")))
-                actual_price = _parse_number(main_row.get("concession_actual_price"))
-                operator = _clean_cell(main_row.get("operator"))
-                
-                # 收入 = 支付金额合计（含优惠券），如果为0则用实际售价
-                revenue = total_payment if total_payment != 0 else actual_price
-                
+                category = _clean_cell(row.get("concession_category"))
+                sub_category = _clean_cell(row.get("concession_sub_category"))
+                quantity = int(_parse_number(row.get("concession_quantity")))
+                actual_price = _parse_number(row.get("concession_actual_price"))
+                operator = _clean_cell(row.get("operator"))
+                payment_value = row.get("concession_payment")
+                revenue = _parse_number(payment_value)
+                if payment_value in (None, ""):
+                    revenue = actual_price
+
                 if revenue != 0 or quantity != 0:
                     concession_items.append({
                         "item_name": item_name,
@@ -907,7 +931,7 @@ def _aggregate_films(snapshots: list[dict[str, Any]]) -> list[dict[str, Any]]:
     totals: dict[str, dict[str, Any]] = {}
     for snapshot in snapshots:
         raw = _load_raw(snapshot)
-        for film in raw.get("films", []):
+        for film in _normalize_film_metrics(raw.get("films", [])):
             name = film.get("film_name") or "未命名影片"
             item = totals.setdefault(name, {"film_name": name, "film_box_office": 0.0, "film_attendance": 0})
             item["film_box_office"] = round(item["film_box_office"] + float(film.get("film_box_office") or 0), 2)
@@ -943,15 +967,17 @@ def _sync_raw_summary(raw: dict[str, Any], snapshot: dict[str, Any]) -> dict[str
 
 
 def _overview_from_snapshot(snapshot: dict[str, Any], raw: dict[str, Any]) -> dict[str, Any]:
+    box_office = raw.get("summary", {}).get("box_office", 0)
+    customers = snapshot["customer_count"] or 0
     return {
         "date": snapshot["date"],
         "revenue": snapshot["revenue"],
-        "box_office": raw.get("summary", {}).get("box_office", 0),
+        "box_office": box_office,
         "concession_revenue": round(_filtered_concession_revenue(raw), 2),
-        "customer_count": snapshot["customer_count"],
+        "customer_count": customers,
         "screenings": snapshot["orders"],
         "occupancy_rate": snapshot["usage_rate"],
-        "avg_order_value": snapshot["avg_order_value"],
+        "avg_order_value": round(box_office / customers, 2) if customers else 0,
         "last_import_time": snapshot["created_at"],
     }
 
@@ -964,7 +990,7 @@ def _empty_overview(
 ) -> dict[str, Any]:
     return {
         "status": status,
-        "data_source": "excel",
+        "data_source": DISPLAY_DATA_SOURCE,
         "date": target_date,
         "revenue": 0,
         "box_office": 0,

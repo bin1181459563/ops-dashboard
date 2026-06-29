@@ -109,9 +109,9 @@ export async function fetchDataSourcesStatus(): Promise<ApiEnvelope<DataSourcesS
             platform: "fenghuang",
             business_type: "cinema",
             status: "not_imported",
-            data_source: "excel",
+            data_source: "database",
             last_sync_time: null,
-            message: "暂未导入",
+            message: "暂无影院数据库快照",
           },
         ],
       },
@@ -179,15 +179,15 @@ export async function fetchDataQualitySummary(): Promise<ApiEnvelope<DataQuality
     return {
       data: {
         sources: [
-          { 
+          {
             name: "凤凰云智(影院)", 
             platform: "fenghuang", 
             business_type: "cinema",
-            data_source: "excel_upload",
+            data_source: "database",
             status: "normal", 
             status_label: "正常",
             freshness: "fresh",
-            freshness_label: "今日已导入",
+            freshness_label: "今日已同步",
             last_update: new Date().toISOString(), 
             last_updated: new Date().toISOString(),
             minutes_ago: 5,
@@ -382,7 +382,7 @@ export interface CinemaImportLog {
 
 export interface CinemaDetail {
   status: "ok" | "not_imported" | "no_data";
-  data_source?: "excel";
+  data_source?: "database" | "excel";
   date?: string;
   today?: {
     date: string;
@@ -1349,6 +1349,7 @@ export interface ConcessionHotCombination {
 
 export interface ConcessionRecommendationsData {
   status: string;
+  source?: string;
   title?: string;
   conclusion?: string;
   evidence?: string[];
@@ -1746,12 +1747,16 @@ export interface MemberAnalysis {
   status: "ok" | "no_data";
   message?: string;
   source?: string;
+  data_gaps?: string[];
+  data_coverage?: Record<string, number>;
   summary: {
     total_members: number;
     total_amount: number;
     total_count: number;
     avg_per_member: number;
     avg_per_visit: number;
+    total_recharge_amount?: number;
+    open_card_count?: number;
   };
   frequency_distribution: Record<string, number>;
   avg_amount_distribution: Record<string, number>;
@@ -1877,6 +1882,50 @@ export async function updateSingleItemConfig(itemName: string, action: "set_thre
     item_name: itemName,
     action,
     value: value || 0,
+  });
+  return response.data;
+}
+
+export interface DailyBriefingResponse {
+  status: string;
+  target_date: string;
+  generated_on: string;
+  yesterday: string;
+  warnings: string[];
+  sections: {
+    schedule: {
+      early: string[];
+      middle: string[];
+      late: string[];
+      rest: string[];
+    };
+    weather: string;
+    cinema: {
+      first_time: string;
+      first_film: string;
+      first_presale: number;
+      total_presale: number;
+    };
+    prediction: number;
+    handover: string[];
+    inventory: string[];
+    employees: string[];
+    activity: string[];
+  };
+  message: string;
+}
+
+/** 每日班前简报 */
+export async function fetchDailyBriefing(date?: string): Promise<DailyBriefingResponse> {
+  const params = date ? `?date=${encodeURIComponent(date)}` : "";
+  const response = await axios.get<DailyBriefingResponse>(`${getApiBase()}/api/operations/daily-briefing${params}`);
+  return response.data;
+}
+
+export async function fetchDailyBriefingImage(date?: string): Promise<Blob> {
+  const params = date ? `?date=${encodeURIComponent(date)}` : "";
+  const response = await axios.get(`${getApiBase()}/api/operations/daily-briefing/image${params}`, {
+    responseType: "blob",
   });
   return response.data;
 }

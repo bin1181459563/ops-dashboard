@@ -1,5 +1,6 @@
 from fastapi.testclient import TestClient
 
+from app.core.config import settings
 from app.main import create_app
 from app.api.routes.overview import _latest_platform_metrics
 from app.models.schemas import UnifiedMetric
@@ -26,7 +27,9 @@ def test_api_endpoints_return_unified_envelope(tmp_path):
         assert set(body.keys()) == {"data", "time", "source"}
 
 
-def test_scheduler_is_disabled_by_default(tmp_path):
+def test_scheduler_is_disabled_by_default(tmp_path, monkeypatch):
+    monkeypatch.setattr(settings, "auto_collect_enabled", False)
+
     app = create_app(db_path=tmp_path / "ops_dashboard.db", start_scheduler=True)
 
     assert app.state.scheduler is None
@@ -36,12 +39,11 @@ def test_overview_contains_cinema_not_imported_state(tmp_path):
     app = create_app(db_path=tmp_path / "ops_dashboard.db", start_scheduler=False)
     client = TestClient(app)
 
-    client.post("/api/collect/run")
     overview = client.get("/api/overview").json()["data"]
 
     assert overview["cinema"]["status"] == "not_imported"
-    assert overview["cinema"]["data_source"] == "excel"
-    assert overview["cinema"]["message"] == "请先上传凤凰云智 Excel 报表"
+    assert overview["cinema"]["data_source"] == "database"
+    assert overview["cinema"]["message"] == "暂无影院数据库快照"
 
 
 def test_empty_overview_returns_no_platform_metrics(tmp_path):
@@ -109,7 +111,12 @@ def test_collect_history_endpoint_returns_recent_runs(tmp_path):
     assert history_response.status_code == 200
     runs = history_response.json()["data"]
     assert runs[0]["status"] == "completed"
-    assert len(runs[0]["platform_results"]) == 3
+    assert [item["platform"] for item in runs[0]["platform_results"]] == [
+        "xiaotie",
+        "wu_laoban",
+        "qgcloud",
+        "fenghuang",
+    ]
 
 
 def test_order_snapshots_endpoint_returns_recent_business_events(tmp_path, monkeypatch):

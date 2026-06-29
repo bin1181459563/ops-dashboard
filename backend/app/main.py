@@ -3,7 +3,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import ai_report, alerts, automation, budget, cinema, collect, concession, concession_recommendations, customer, customer_wake_up, data_sources, db_detail, detail, employee, employee_coach, finance, inventory_alert, member, overview, realtime, quick_stats, screening_suggestions, sync_logs, trend, data_quality, ai_insights, audit
+from app.api.routes import ai_report, alerts, automation, budget, cinema, collect, concession, concession_recommendations, customer, customer_wake_up, daily_briefing, data_sources, db_detail, detail, employee, employee_coach, finance, inventory_alert, member, overview, realtime, quick_stats, screening_suggestions, sync_logs, trend, data_quality, ai_insights, audit
 from app.core.config import settings
 from app.core.database import DashboardRepository
 from app.core.scheduler import create_scheduler
@@ -46,6 +46,7 @@ def create_app(db_path: str | Path | None = None, start_scheduler: bool = True) 
     app.include_router(ai_insights.router, prefix="/api")
     app.include_router(audit.router, prefix="/api")
     app.include_router(customer_wake_up.router, prefix="/api")
+    app.include_router(daily_briefing.router, prefix="/api")
     app.include_router(employee_coach.router, prefix="/api")
     app.include_router(screening_suggestions.router, prefix="/api")
     app.include_router(concession_recommendations.router, prefix="/api")

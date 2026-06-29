@@ -147,9 +147,9 @@ export default function CinemaPage() {
       const detail = e?.response?.data?.detail;
       if (detail && typeof detail === "object" && "results" in detail) {
         setUploadResult(detail);
-        setError(detail.message || "批量导入失败");
+        setError(detail.message || "批量补录失败");
       } else {
-        setError(getDashboardErrorMessage(detail || e, "导入失败"));
+        setError(getDashboardErrorMessage(detail || e, "补录失败"));
       }
       await refresh();
     } finally {
@@ -179,8 +179,8 @@ export default function CinemaPage() {
         <div className="topBar">
           <div>
             <Link href="/dashboard" className="backLink">← 返回驾驶舱</Link>
-            <span className="eyebrow">凤凰云智 Excel</span>
-            <h1>影院接入</h1>
+            <span className="eyebrow">凤凰云智数据</span>
+            <h1>影院详情</h1>
             <div className="cinemaNav">
               <Link href="/dashboard/concession" className="navLink">🍿 卖品详情</Link>
               <Link href="/dashboard/employee" className="navLink" style={{ marginLeft: 12 }}>👥 员工绩效</Link>
@@ -190,7 +190,7 @@ export default function CinemaPage() {
             </div>
           </div>
           <div className="topMeta">
-            {overview?.last_import_time && <span className="clock">最后导入 {formatDateTime(overview.last_import_time)}</span>}
+            {overview?.last_import_time && <span className="clock">最后同步 {formatDateTime(overview.last_import_time)}</span>}
             <button className="refreshButton" onClick={() => { refresh(); refreshConcession(); }} disabled={loading}>
               {loading ? "刷新中..." : "刷新"}
             </button>
@@ -230,37 +230,42 @@ export default function CinemaPage() {
           </div>
         </section>
 
+        {error && (
+          <div className="errorBanner">
+            {error}
+          </div>
+        )}
+
         <section className="cinemaStatusGrid">
           <div className="panel cinemaStatusPanel">
             <div className="panelHeader">
               <div>
                 <span className="eyebrow">数据源</span>
-                <h2>凤凰云智 Excel</h2>
+                <h2>经营数据库</h2>
               </div>
               <span className={`importStatus statusBadge-${overview?.status || "not_imported"}`}>
                 {statusLabel(overview?.status)}
               </span>
             </div>
             <div className="statusMetaGrid">
-              <div><span>最后导入</span><strong>{overview?.last_import_time ? formatDateTime(overview.last_import_time) : "暂无"}</strong></div>
-              <div><span>业务日期</span><strong>{overview?.date || selectedDate || "未导入"}</strong></div>
-              <div><span>状态说明</span><strong>{overview?.message || "请先上传凤凰云智 Excel 报表"}</strong></div>
+              <div><span>最后同步</span><strong>{overview?.last_import_time ? formatDateTime(overview.last_import_time) : "暂无"}</strong></div>
+              <div><span>业务日期</span><strong>{overview?.date || selectedDate || "暂无数据"}</strong></div>
+              <div><span>状态说明</span><strong>{overview?.message || "暂无影院数据库快照"}</strong></div>
             </div>
           </div>
 
           <div className="panel uploadPanel">
             <div className="panelHeader">
               <div>
-                <span className="eyebrow">导入报表</span>
-                <h2>上传经营报表</h2>
+                <span className="eyebrow">备用工具</span>
+                <h2>历史报表补录</h2>
               </div>
               <label className={`uploadButton ${uploading ? "uploadButton-disabled" : ""}`}>
                 {uploading ? "解析中..." : "选择文件"}
                 <input type="file" accept=".xlsx,.xls,.csv" multiple onChange={handleFile} disabled={uploading} />
               </label>
             </div>
-            <p className="uploadHint">支持 xlsx / xls / csv，可一次选择多张报表。系统会自动按营运综合、影片排名、卖品明细、会员明细的顺序导入。</p>
-            {error && <div className="errorBanner">{error}</div>}
+            <p className="uploadHint">日常数据以数据库同步为准。这里仅用于补录缺失日期或临时修正历史数据，支持 xlsx / xls / csv 多文件上传。</p>
             {uploadResult && (
               <div className={`importResult ${uploadResult.status === "partial" ? "importResult-warning" : ""} ${uploadResult.status === "failed" ? "importResult-error" : ""}`}>
                 <strong>{uploadResult.message}</strong>
@@ -287,20 +292,20 @@ export default function CinemaPage() {
             )}
             {missingFields.length > 0 && (
               <div className="missingFields">
-                <span>当前上传文件缺失字段</span>
+                <span>当前补录文件缺失字段</span>
                 <strong>{missingFields.join("、")}</strong>
                 {missingFields.some((field) => field.includes("影片")) && (
-                  <em>影片排行数据请继续上传"影片成绩排名表"，系统会合并到同一营业日，不覆盖营运汇总。</em>
+                  <em>影片排行数据可继续补录"影片成绩排名表"，系统会合并到同一营业日，不覆盖营运汇总。</em>
                 )}
               </div>
             )}
           </div>
         </section>
 
-        {overview?.status !== "ok" && (
+        {!error && overview?.status !== "ok" && (
           <div className="panel cinemaEmpty">
-            <h2>{overview?.status === "no_data" ? "所选日期暂无数据" : "未导入影院数据"}</h2>
-            <p>{overview?.message || "请上传凤凰云智 Excel 报表。未导入时影院不会计入主驾驶舱总收入，也不会影响棋牌和台球数据。"}</p>
+            <h2>{overview?.status === "no_data" ? "所选日期暂无数据" : "暂无影院数据"}</h2>
+            <p>{overview?.message || "数据库中暂无影院经营快照。请检查自动同步或使用历史报表补录缺失日期。"}</p>
           </div>
         )}
 
@@ -308,7 +313,7 @@ export default function CinemaPage() {
           <>
             <section className="metricGrid">
               <Metric label="票房" value={currency(today.box_office)} caption={today.date} tone="gold" />
-              <Metric label="卖品收入" value={currency(today.concession_revenue)} caption="Excel 解析" tone="green" />
+              <Metric label="卖品收入" value={currency(today.concession_revenue)} caption="数据库快照" tone="green" />
               <Metric label="总收入" value={currency(cinemaSummary.revenue)} caption={`人均 ${currency(cinemaSummary.avgOrderValue || 0)}`} tone="cyan" />
               <Metric label="观影人次" value={`${cinemaSummary.customers}`} caption={`${cinemaSummary.orders} 场 · 上座率 ${percent(cinemaSummary.utilizationRate || 0)}`} tone="muted" />
             </section>
@@ -356,7 +361,7 @@ export default function CinemaPage() {
               <div className="panel">
                 <div className="panelHeader">
                   <h3>场次和上座率分析</h3>
-                  <span className="panelHint">按已导入日期统计</span>
+                  <span className="panelHint">按数据库日期统计</span>
                 </div>
                 <table className="rankingTable">
                   <thead><tr><th>日期</th><th>场次</th><th>上座率</th></tr></thead>
@@ -543,12 +548,12 @@ function ImportRecords({ records }: { records: Array<{ file_name: string | null;
   return (
     <div className="panel">
       <div className="panelHeader">
-        <h3>最近导入记录</h3>
+        <h3>最近补录记录</h3>
         <span className="panelHint">sync_logs</span>
       </div>
       {records.length ? (
         <table className="rankingTable">
-          <thead><tr><th>文件名</th><th>导入时间</th><th>状态</th><th>错误原因</th></tr></thead>
+          <thead><tr><th>文件名</th><th>补录时间</th><th>状态</th><th>错误原因</th></tr></thead>
           <tbody>
             {records.map((item, index) => (
               <tr key={`${item.file_name}-${index}`}>
@@ -560,7 +565,7 @@ function ImportRecords({ records }: { records: Array<{ file_name: string | null;
             ))}
           </tbody>
         </table>
-      ) : <div className="emptyState">暂无导入记录</div>}
+      ) : <div className="emptyState">暂无补录记录</div>}
     </div>
   );
 }
@@ -574,7 +579,7 @@ function percent(value: number) {
 }
 
 function statusLabel(status?: string) {
-  return { ok: "已导入", not_imported: "未导入", no_data: "暂无数据", error: "导入失败" }[status || "not_imported"] || status;
+  return { ok: "已同步", not_imported: "暂无数据", no_data: "暂无数据", error: "同步异常" }[status || "not_imported"] || status;
 }
 
 function reportTypeLabel(type: string) {

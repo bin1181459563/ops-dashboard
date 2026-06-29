@@ -6,7 +6,7 @@ from typing import Any
 
 from fastapi import APIRouter, Query, Request
 
-from app.services.cinema_excel import BUSINESS_TYPE, PLATFORM, STORE_ID, _load_raw
+from app.services.cinema_excel import BUSINESS_TYPE, PLATFORM, STORE_ID, _filtered_concession_revenue, _load_raw
 
 router = APIRouter()
 
@@ -15,14 +15,37 @@ _EXCLUDED_CATEGORIES = {"顽小游", "小铁台球", "顽麻社", "娱乐"}
 
 def _is_entertainment(item: dict) -> bool:
     """判断商品是否属于娱乐项目"""
-    cat = (item.get("category") or "").strip()
-    name = (item.get("item_name") or item.get("product_name") or "").strip()
+    cat = _item_category(item)
+    name = _item_name(item)
     if cat in _EXCLUDED_CATEGORIES:
         return True
     for kw in ("顽小游", "小铁台球", "顽麻社"):
         if kw in name:
             return True
     return False
+
+
+def _item_name(item: dict) -> str:
+    return str(item.get("item_name") or item.get("product_name") or item.get("concession_item_name") or "未知").strip()
+
+
+def _item_category(item: dict) -> str:
+    return str(item.get("category") or item.get("concession_category") or "未知").strip()
+
+
+def _item_quantity(item: dict) -> float:
+    return _number(item.get("quantity", item.get("sale_num", item.get("concession_quantity", 0))))
+
+
+def _item_revenue(item: dict) -> float:
+    return _number(item.get("revenue", item.get("pay_amount", item.get("concession_payment", 0))))
+
+
+def _number(value: Any) -> float:
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 @router.get("/cinema/concession")
@@ -54,7 +77,7 @@ def get_concession_detail(
         summary = raw.get("summary", {})
 
         # 累加汇总卖品收入（已排除娱乐项）
-        summary_total += summary.get("concession_revenue", 0) or 0
+        summary_total += _filtered_concession_revenue(raw)
 
         # 按类别筛选
         if category:
@@ -66,33 +89,33 @@ def get_concession_detail(
         all_items.extend(items)
         daily_summary.append({
             "date": snapshot["date"],
-            "revenue": summary.get("concession_revenue", 0),
+            "revenue": _filtered_concession_revenue(raw),
             "items_count": len(items),
         })
     
     # 按类别汇总
     category_stats: dict[str, dict[str, Any]] = {}
     for item in all_items:
-        cat = item.get("category", "未知")
+        cat = _item_category(item)
         if cat not in category_stats:
             category_stats[cat] = {"category": cat, "quantity": 0, "revenue": 0, "items": 0}
-        category_stats[cat]["quantity"] += item.get("quantity", 0)
-        category_stats[cat]["revenue"] += item.get("revenue", 0)
+        category_stats[cat]["quantity"] += _item_quantity(item)
+        category_stats[cat]["revenue"] += _item_revenue(item)
         category_stats[cat]["items"] += 1
     
     # 按品名汇总
     item_stats: dict[str, dict[str, Any]] = {}
     for item in all_items:
-        name = item.get("item_name") or item.get("name") or "未知"
+        name = _item_name(item)
         if name not in item_stats:
             item_stats[name] = {
                 "item_name": name,
-                "category": item.get("category", "未知"),
+                "category": _item_category(item),
                 "quantity": 0,
                 "revenue": 0,
             }
-        item_stats[name]["quantity"] += item.get("quantity", 0)
-        item_stats[name]["revenue"] += item.get("revenue", 0)
+        item_stats[name]["quantity"] += _item_quantity(item)
+        item_stats[name]["revenue"] += _item_revenue(item)
     
     # 排序
     category_list = sorted(category_stats.values(), key=lambda x: -x["revenue"])

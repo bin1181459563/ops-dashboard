@@ -59,6 +59,57 @@ def _bi_post(path: str, body: dict, token: str) -> dict:
     return resp.json()
 
 
+def _bi_post_all_pages(path: str, body: dict, token: str, max_pages: int = 100) -> dict:
+    """调用BI分页接口并合并所有页的data.list，第一页保留summary。"""
+    page_body = body.copy()
+    page_size = int(page_body.get("pageSize") or 500)
+    page_body["pageNo"] = 1
+    page_body["pageSize"] = page_size
+
+    first = _bi_post(path, page_body, token)
+    data = first.get("data")
+    if not isinstance(data, dict):
+        return first
+
+    items = list(data.get("list") or [])
+    total_items = data.get("totalItems")
+    if total_items is None:
+        data["list"] = items
+        return first
+
+    total_items = int(total_items or 0)
+    page_no = 2
+    while len(items) < total_items and page_no <= max_pages:
+        next_body = {**page_body, "pageNo": page_no}
+        next_page = _bi_post(path, next_body, token)
+        next_data = next_page.get("data")
+        if not isinstance(next_data, dict):
+            break
+        next_items = list(next_data.get("list") or [])
+        if not next_items:
+            break
+        items.extend(next_items)
+        page_no += 1
+
+    data["list"] = items
+    return first
+
+
+def _number(value: Any) -> float:
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _int_number(value: Any) -> int:
+    return int(_number(value))
+
+
+def _cents_to_yuan(value: Any) -> float:
+    return round(_number(value) / 100, 2)
+
+
 def _goods_get(path: str, params: dict, token: str) -> dict:
     """调用商品/库存接口（lark-goodsprod.alibaba.com）"""
     params["access_token"] = token
@@ -80,7 +131,7 @@ def collect_schedule_detail(token: str, begin_time: str, end_time: str) -> dict:
         "beginTime": begin_time,
         "endTime": end_time,
     }
-    data = _bi_post("/bi/ticket/scheduleDetail", body, token)
+    data = _bi_post_all_pages("/bi/ticket/scheduleDetail", body, token)
     
     if data.get("code") != "SUCCESS":
         raise Exception(f"场次明细API失败: {data.get('message')}")
@@ -97,9 +148,9 @@ def collect_schedule_detail(token: str, begin_time: str, end_time: str) -> dict:
             films.append({
                 "film_name": film_name,
                 "film_code": col.get("filmCode", ""),
-                "box_office": col.get("ticketTotalAmount", 0) / 100,  # 分→元
-                "audience": col.get("showTicketNum", 0),
-                "screenings": col.get("scheduleCount", 0),
+                "box_office": _cents_to_yuan(col.get("ticketTotalAmount")),  # 分→元
+                "audience": _int_number(col.get("showTicketNum")),
+                "screenings": _int_number(col.get("scheduleCount")),
                 "dimensional": col.get("filmDimensionalName", ""),
                 "language": col.get("filmLanguageName", ""),
             })
@@ -108,14 +159,14 @@ def collect_schedule_detail(token: str, begin_time: str, end_time: str) -> dict:
     films.sort(key=lambda x: x["box_office"], reverse=True)
     
     return {
-        "show_ticket_num": int(column.get("showTicketNum", 0) or 0),
-        "ticket_total_amount": round(column.get("ticketTotalAmount", 0) / 100, 2),  # 分→元
-        "schedule_count": int(column.get("scheduleCount", 0) or 0),
-        "average_ticket_price": round(column.get("averageTicketPrice", 0) / 100, 2),  # 分→元
-        "refund_ticket_num": int(column.get("refundTicketNum", 0) or 0),
-        "refund_ticket_amount": round(column.get("refundTicketAmount", 0) / 100, 2),
-        "seat_num": int(column.get("seatNum", 0) or 0),
-        "seat_num_rate": float(column.get("seatNumRate", 0) or 0),
+        "show_ticket_num": _int_number(column.get("showTicketNum")),
+        "ticket_total_amount": _cents_to_yuan(column.get("ticketTotalAmount")),  # 分→元
+        "schedule_count": _int_number(column.get("scheduleCount")),
+        "average_ticket_price": _cents_to_yuan(column.get("averageTicketPrice")),  # 分→元
+        "refund_ticket_num": _int_number(column.get("refundTicketNum")),
+        "refund_ticket_amount": _cents_to_yuan(column.get("refundTicketAmount")),
+        "seat_num": _int_number(column.get("seatNum")),
+        "seat_num_rate": _number(column.get("seatNumRate")),
         "films": films,
     }
 
@@ -133,7 +184,7 @@ def collect_goods_detail(token: str, begin_time: str, end_time: str) -> dict:
         "endTime": end_time,
         "timeSegment": False,
     }
-    data = _bi_post("/bi/goods/orderDetail", body, token)
+    data = _bi_post_all_pages("/bi/goods/orderDetail", body, token)
     
     if data.get("code") != "SUCCESS":
         raise Exception(f"卖品明细API失败: {data.get('message')}")
@@ -174,7 +225,7 @@ def collect_member_open_card(token: str, begin_date: str, end_date: str) -> dict
         "beginTime": begin_date,
         "endTime": end_date,
     }
-    data = _bi_post("/bi/card/salesReport", body, token)
+    data = _bi_post_all_pages("/bi/card/salesReport", body, token)
     
     if data.get("code") != "SUCCESS":
         raise Exception(f"开卡API失败: {data.get('message')}")
@@ -215,7 +266,7 @@ def collect_member_recharge(token: str, begin_date: str, end_date: str) -> dict:
         "beginTime": begin_date,
         "endTime": end_date,
     }
-    data = _bi_post("/bi/card/rechargeReport", body, token)
+    data = _bi_post_all_pages("/bi/card/rechargeReport", body, token)
     
     if data.get("code") != "SUCCESS":
         raise Exception(f"充值API失败: {data.get('message')}")
@@ -245,6 +296,59 @@ def collect_member_recharge(token: str, begin_date: str, end_date: str) -> dict:
     }
 
 
+def collect_member_payment(token: str, begin_date: str, end_date: str) -> dict:
+    """
+    采集会员消费明细（payReport）
+    返回: {consume_amount, items: [{card_no, card_type, amount, product_type, ...}]}
+    """
+    body = {
+        "pageNo": 1,
+        "pageSize": 500,
+        "beginTime": begin_date,
+        "endTime": end_date,
+    }
+    data = _bi_post_all_pages("/bi/card/payReport", body, token)
+
+    if data.get("code") != "SUCCESS":
+        raise Exception(f"会员消费API失败: {data.get('message')}")
+
+    summary = data.get("data", {}).get("summary", {})
+    column = summary.get("columnValueMap", {})
+
+    items = []
+    for item in data.get("data", {}).get("list", []):
+        col = item.get("columnValueMap", {})
+        card_no = col.get("cardNo", "")
+        item_name = col.get("payItemName", "")
+        emp_name = col.get("empName", "")
+        pay_time = col.get("payDateTime", "")
+        items.append({
+            "card_type": col.get("cardTypeName", ""),
+            "card_no": card_no,
+            "member_id": card_no,
+            "product_name": item_name,
+            "item_name": item_name,
+            "product_type": col.get("payItemType", ""),
+            "amount": round(float(col.get("totalAmt") or 0) / 100, 2),
+            "original_amount": round(float(col.get("itemPrice") or 0) / 100, 2),
+            "consume_time": pay_time,
+            "time": pay_time,
+            "show_time": col.get("showDateTime", ""),
+            "operator": emp_name,
+            "emp_name": emp_name,
+            "emp_code": col.get("empCode", ""),
+            "order_no": col.get("orderNo", ""),
+            "hall_name": col.get("hallName", ""),
+            "channel": col.get("channelName", ""),
+            "account_id": col.get("accountId", ""),
+        })
+
+    return {
+        "consume_amount": round(float(column.get("totalAmt") or 0) / 100, 2),
+        "items": items,
+    }
+
+
 def collect_inventory(token: str, depot_id: str = "12198", depot_type: str = "RACK") -> list[dict]:
     """
     采集实时库存
@@ -265,14 +369,18 @@ def collect_inventory(token: str, depot_id: str = "12198", depot_type: str = "RA
     
     items = []
     for item in data.get("data", {}).get("data", []):
+        quantity = float(item.get("itemQuantity", 0) or 0)
+        cost_with_tax = round(float(item.get("costWithTax", 0) or 0), 2)
         items.append({
             "item_name": item.get("itemName", ""),
             "item_code": item.get("itemCode", ""),
             "category": item.get("firstClassName", ""),
-            "quantity": float(item.get("itemQuantity", 0) or 0),
+            "quantity": quantity,
+            "stock_quantity": quantity,
             "pos_price": round(float(item.get("posPrice", 0) or 0), 2),
-            "cost_with_tax": round(float(item.get("costWithTax", 0) or 0), 2),
+            "cost_with_tax": cost_with_tax,
             "cost_no_tax": round(float(item.get("costNoTax", 0) or 0), 2),
+            "stock_cost": round(quantity * cost_with_tax, 2),
         })
     
     return items
@@ -319,11 +427,12 @@ def collect_fenghuang_raw(target_date: str | None = None) -> dict | None:
             goods = collect_goods_detail(t, begin_time, end_time)
             open_card = collect_member_open_card(t, date_str, date_str)
             recharge = collect_member_recharge(t, date_str, date_str)
+            member_payment = collect_member_payment(t, date_str, date_str)
             inv_front = collect_inventory(t, depot_id="12198", depot_type="RACK")
             inv_warehouse = collect_inventory(t, depot_id="32170", depot_type="DEPOT")
             return {
                 "schedule": schedule, "goods": goods,
-                "open_card": open_card, "recharge": recharge,
+                "open_card": open_card, "recharge": recharge, "member_payment": member_payment,
                 "inv_front": inv_front, "inv_warehouse": inv_warehouse,
             }
         except Exception as e:
@@ -336,11 +445,12 @@ def collect_fenghuang_raw(target_date: str | None = None) -> dict | None:
                 goods = collect_goods_detail(t, begin_time, end_time)
                 open_card = collect_member_open_card(t, date_str, date_str)
                 recharge = collect_member_recharge(t, date_str, date_str)
+                member_payment = collect_member_payment(t, date_str, date_str)
                 inv_front = collect_inventory(t, depot_id="12198", depot_type="RACK")
                 inv_warehouse = collect_inventory(t, depot_id="32170", depot_type="DEPOT")
                 return {
                     "schedule": schedule, "goods": goods,
-                    "open_card": open_card, "recharge": recharge,
+                    "open_card": open_card, "recharge": recharge, "member_payment": member_payment,
                     "inv_front": inv_front, "inv_warehouse": inv_warehouse,
                 }
             raise
@@ -351,6 +461,7 @@ def collect_fenghuang_raw(target_date: str | None = None) -> dict | None:
         goods = data["goods"]
         open_card = data["open_card"]
         recharge = data["recharge"]
+        member_payment = data["member_payment"]
         
         # 给库存打标签
         for item in data["inv_front"]:
@@ -373,9 +484,11 @@ def collect_fenghuang_raw(target_date: str | None = None) -> dict | None:
                 "refund_amount": schedule["refund_ticket_amount"],
                 "member_open_card_total": open_card["card_count"],
                 "member_recharge_total": recharge["recharge_amount"],
+                "member_consume": member_payment["consume_amount"],
             },
             "films": schedule["films"],
             "concession_items": goods["items"],
+            "member_items": member_payment["items"],
             "member_open_card_items": open_card["items"],
             "member_recharge_items": recharge["items"],
             "inventory_items": inventory,
@@ -417,3 +530,119 @@ def check_fenghuang_token() -> dict:
         return {"valid": False, "error": f"HTTP {e.response.status_code}"}
     except Exception as e:
         return {"valid": False, "error": str(e)}
+# === 新增：不含库存的每日采集函数 ===
+def collect_fenghuang_daily(target_date: str | None = None) -> dict | None:
+    """
+    每日采集（不含库存）：场次、卖品、开卡、充值、会员消费
+    凌晨2点运行，采集昨天数据
+    """
+    token = get_access_token()
+    if not token:
+        return None
+    
+    now = _now_beijing()
+    if target_date:
+        begin_time, end_time = _date_range(target_date)
+        date_str = target_date
+    else:
+        begin_time, end_time = _today_range()
+        date_str = now.date().isoformat()
+    
+    def _collect_with_retry(t: str) -> dict:
+        nonlocal token
+        try:
+            schedule = collect_schedule_detail(t, begin_time, end_time)
+            goods = collect_goods_detail(t, begin_time, end_time)
+            open_card = collect_member_open_card(t, date_str, date_str)
+            recharge = collect_member_recharge(t, date_str, date_str)
+            member_payment = collect_member_payment(t, date_str, date_str)
+            return {
+                "schedule": schedule, "goods": goods,
+                "open_card": open_card, "recharge": recharge,
+                "member_payment": member_payment,
+            }
+        except Exception as e:
+            if "401" in str(e) or "token" in str(e).lower():
+                print(f"⚠️ token可能过期({e})，尝试刷新...")
+                token = _refresh_token()
+                t = token
+                schedule = collect_schedule_detail(t, begin_time, end_time)
+                goods = collect_goods_detail(t, begin_time, end_time)
+                open_card = collect_member_open_card(t, date_str, date_str)
+                recharge = collect_member_recharge(t, date_str, date_str)
+                member_payment = collect_member_payment(t, date_str, date_str)
+                return {
+                    "schedule": schedule, "goods": goods,
+                    "open_card": open_card, "recharge": recharge,
+                    "member_payment": member_payment,
+                }
+            raise
+    
+    try:
+        data = _collect_with_retry(token)
+        schedule = data["schedule"]
+        goods = data["goods"]
+        open_card = data["open_card"]
+        recharge = data["recharge"]
+        member_payment = data["member_payment"]
+        
+        return {
+            "summary": {
+                "revenue": schedule["ticket_total_amount"] + goods["pay_amount"],
+                "box_office": schedule["ticket_total_amount"],
+                "concession_revenue": goods["pay_amount"],
+                "customer_count": schedule["show_ticket_num"],
+                "screenings": schedule["schedule_count"],
+                "average_ticket_price": schedule["average_ticket_price"],
+                "occupancy_rate": schedule["seat_num_rate"],
+                "refund_count": schedule["refund_ticket_num"],
+                "refund_amount": schedule["refund_ticket_amount"],
+                "member_open_card_total": open_card["card_count"],
+                "member_recharge_total": recharge["recharge_amount"],
+                "member_consume": member_payment["consume_amount"],
+            },
+            "films": schedule["films"],
+            "concession_items": goods["items"],
+            "member_items": member_payment["items"],
+            "member_open_card_items": open_card["items"],
+            "member_recharge_items": recharge["items"],
+            "date": date_str,
+            "begin_time": begin_time,
+            "end_time": end_time,
+            "collected_at": now.isoformat(),
+        }
+    except Exception as exc:
+        raise
+
+# === 新增：库存采集函数 ===
+def collect_fenghuang_inventory() -> list[dict] | None:
+    """
+    实时库存采集：前台+大仓
+    晚上10点运行
+    """
+    token = get_access_token()
+    if not token:
+        return None
+    
+    try:
+        inv_front = collect_inventory(token, depot_id="12198", depot_type="RACK")
+        inv_warehouse = collect_inventory(token, depot_id="32170", depot_type="DEPOT")
+        
+        for item in inv_front:
+            item["location"] = "front"
+        for item in inv_warehouse:
+            item["location"] = "warehouse"
+        
+        return inv_front + inv_warehouse
+    except Exception as e:
+        if "401" in str(e) or "token" in str(e).lower():
+            print(f"⚠️ token可能过期({e})，尝试刷新...")
+            token = _refresh_token()
+            inv_front = collect_inventory(token, depot_id="12198", depot_type="RACK")
+            inv_warehouse = collect_inventory(token, depot_id="32170", depot_type="DEPOT")
+            for item in inv_front:
+                item["location"] = "front"
+            for item in inv_warehouse:
+                item["location"] = "warehouse"
+            return inv_front + inv_warehouse
+        raise

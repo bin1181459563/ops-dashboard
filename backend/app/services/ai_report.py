@@ -122,10 +122,10 @@ def _status_text(log: dict | None, fallback: str) -> dict[str, str]:
 def _cinema_status(repository, snapshot: dict | None) -> dict[str, str]:
     latest_log = repository.latest_sync_log_for_platform("fenghuang")
     if snapshot:
-        return {"status_text": "正常", "message": "凤凰云智 Excel 已导入"}
+        return {"status_text": "正常", "message": "已从数据库读取凤凰云智经营数据"}
     if latest_log and latest_log.get("status") == "failed":
-        return {"status_text": "导入失败", "message": latest_log.get("message") or "最近导入失败"}
-    return {"status_text": "未接入", "message": "未导入，当前不计入影院经营判断"}
+        return {"status_text": "同步失败", "message": latest_log.get("message") or "最近同步失败"}
+    return {"status_text": "暂无数据", "message": "暂无影院数据库快照，当前不计入影院经营判断"}
 
 
 def _mahjong_line(snapshot: dict | None) -> str:
@@ -159,7 +159,7 @@ def _first_suggestion(xiaotie_status: dict[str, str], cinema_status: dict[str, s
     if "token" in xiaotie_status["status_text"]:
         return "1. 优先恢复小铁 token，避免台球业务继续缺失。"
     if cinema_status["status_text"] != "正常":
-        return "1. 优先补齐凤凰云智影院报表，避免总收入和 AI 判断缺口。"
+        return "1. 优先检查凤凰云智同步和数据库快照，避免总收入和 AI 判断缺口。"
     return "1. 优先处理 AI 任务中心里的高优先级异常，保证数据源和经营动作闭环。"
 
 

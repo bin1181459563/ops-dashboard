@@ -39,7 +39,7 @@ async def import_cinema_excel(request: Request, file: UploadFile = File(...)) ->
             business_type=BUSINESS_TYPE,
             store_id=STORE_ID,
             status="success",
-            message="凤凰云智 Excel 导入成功",
+            message="凤凰云智 Excel 补录成功",
             file_name=file_name,
             started_at=started_at,
             finished_at=finished_at,
@@ -48,7 +48,7 @@ async def import_cinema_excel(request: Request, file: UploadFile = File(...)) ->
         )
         return {
             "status": "ok",
-            "message": "凤凰云智 Excel 导入成功",
+            "message": "凤凰云智 Excel 补录成功",
             "data_source": "excel",
             "file_name": file_name,
             "report_type": parsed["report_type"],
@@ -62,7 +62,7 @@ async def import_cinema_excel(request: Request, file: UploadFile = File(...)) ->
         _log_failed_import(repository, started_at, file_name, str(exc))
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
-        message = f"导入失败：{exc}"
+        message = f"补录失败：{exc}"
         _log_failed_import(repository, started_at, file_name, message)
         raise HTTPException(status_code=400, detail=message) from exc
 
@@ -91,7 +91,7 @@ async def import_cinema_batch(request: Request, files: list[UploadFile] = File(.
             _log_failed_import(repository, started_at, file_name, message)
             failed_results.append(_failed_result(file_name, message))
         except Exception as exc:
-            message = f"导入失败：{exc}"
+            message = f"补录失败：{exc}"
             _log_failed_import(repository, started_at, file_name, message)
             failed_results.append(_failed_result(file_name, message))
 
@@ -115,7 +115,7 @@ async def import_cinema_batch(request: Request, files: list[UploadFile] = File(.
                 business_type=BUSINESS_TYPE,
                 store_id=STORE_ID,
                 status="success",
-                message="凤凰云智 Excel 批量导入成功",
+                message="凤凰云智 Excel 批量补录成功",
                 file_name=file_name,
                 started_at=started_at,
                 finished_at=finished_at,
@@ -128,7 +128,7 @@ async def import_cinema_batch(request: Request, files: list[UploadFile] = File(.
             _log_failed_import(repository, started_at, file_name, message)
             failed_results.append(_failed_result(file_name, message, parsed.get("report_type")))
         except Exception as exc:
-            message = f"导入失败：{exc}"
+            message = f"补录失败：{exc}"
             _log_failed_import(repository, started_at, file_name, message)
             failed_results.append(_failed_result(file_name, message, parsed.get("report_type")))
 
@@ -137,7 +137,7 @@ async def import_cinema_batch(request: Request, files: list[UploadFile] = File(.
     status = "ok" if failed_count == 0 else "partial" if success_count else "failed"
     payload = {
         "status": status,
-        "message": f"批量导入完成：{success_count} 成功，{failed_count} 失败" if success_count else f"批量导入失败：0 成功，{failed_count} 失败",
+        "message": f"批量补录完成：{success_count} 成功，{failed_count} 失败" if success_count else f"批量补录失败：0 成功，{failed_count} 失败",
         "data_source": "excel",
         "success_count": success_count,
         "failed_count": failed_count,
@@ -200,7 +200,7 @@ def _public_snapshot(snapshot: dict) -> dict:
 def _success_result(parsed: dict) -> dict:
     return {
         "status": "ok",
-        "message": "凤凰云智 Excel 导入成功",
+        "message": "凤凰云智 Excel 补录成功",
         "data_source": "excel",
         "file_name": parsed["file_name"],
         "report_type": parsed["report_type"],

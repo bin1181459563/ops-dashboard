@@ -1,328 +1,263 @@
 """
-卖品组合推荐 — 分析卖品搭配并生成套餐优化建议
-数据来源: 凤凰云智 Excel 卖品销售明细
+卖品组合推荐。
+数据来源: daily_snapshots.raw_json 中的 concession_items。
 """
 from __future__ import annotations
 
+import json
 from collections import defaultdict
 from itertools import combinations
-from pathlib import Path
 from typing import Any
 
-import openpyxl
+from app.core.database import DashboardRepository
 
-DATA_DIR = Path.home() / ".hermes" / "workspace" / "cinema-data"
-CINEMA_NAME = "SFC上影国际影城翡翠城店"
+BUSINESS_TYPE = "cinema"
+PLATFORM = "fenghuang"
+STORE_ID = "cinema_feicuicheng"
 
 
-def _find_latest_file(keyword: str) -> Path | None:
-    files = sorted(
-        DATA_DIR.glob(f"*{keyword}*2026*.xlsx"),
-        key=lambda f: f.stat().st_mtime,
-        reverse=True,
+def analyze_concession_combinations(repository: DashboardRepository, days: int = 30) -> dict[str, Any]:
+    snapshots = repository.daily_snapshots_for(BUSINESS_TYPE, PLATFORM, STORE_ID, days)
+    if not snapshots:
+        return {"status": "no_data", "source": "daily_snapshots", "message": "暂无影院数据库快照"}
+
+    category_stats: dict[str, dict[str, Any]] = defaultdict(
+        lambda: {"count": 0, "amount": 0.0, "items": defaultdict(lambda: {"count": 0, "amount": 0.0})}
     )
-    return files[0] if files else None
+    item_stats: dict[str, dict[str, Any]] = defaultdict(lambda: {"count": 0, "amount": 0.0, "category": "未分类"})
+    order_groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    hour_stats: dict[str, dict[str, Any]] = defaultdict(lambda: {"count": 0, "amount": 0.0})
+    rows_count = 0
 
+    for snapshot in snapshots:
+        raw = _parse_raw(snapshot.get("raw_json"))
+        snapshot_date = str(snapshot.get("date") or "")
+        for item in raw.get("concession_items") or []:
+            name = _text(item.get("item_name") or item.get("product_name") or item.get("concession_item_name"))
+            if not name:
+                continue
+            category = _text(item.get("category") or item.get("concession_category")) or "未分类"
+            quantity = _number(item.get("quantity", item.get("sale_num", item.get("concession_quantity", 0))))
+            amount = _number(item.get("revenue", item.get("pay_amount", item.get("concession_payment", 0))))
+            sale_time = _text(item.get("sale_time") or item.get("time") or item.get("consume_time"))
+            operator = _text(item.get("operator") or item.get("emp_name") or item.get("seller"))
+            if quantity <= 0 and amount <= 0:
+                continue
 
-def _parse_sheet(path: Path, header_row: int = 5) -> list[dict]:
-    wb = openpyxl.load_workbook(path, data_only=True)
-    ws = wb.active
-    rows = list(ws.iter_rows(min_row=header_row, values_only=True))
-    wb.close()
-    if not rows:
-        return []
-    headers = [str(h).strip() if h else f"col_{i}" for i, h in enumerate(rows[0])]
-    result = []
-    for row in rows[1:]:
-        if not row or not row[0]:
-            continue
-        first = str(row[0]) if row[0] else ""
-        if first.startswith("合计") or first.startswith("总计"):
-            continue
-        record = {}
-        for i, val in enumerate(row):
-            if i < len(headers):
-                record[headers[i]] = val
-        result.append(record)
-    return result
+            rows_count += 1
+            count = int(quantity) if quantity > 0 else 1
+            category_stats[category]["count"] += count
+            category_stats[category]["amount"] += amount
+            category_stats[category]["items"][name]["count"] += count
+            category_stats[category]["items"][name]["amount"] += amount
+            item_stats[name]["count"] += count
+            item_stats[name]["amount"] += amount
+            item_stats[name]["category"] = category
 
-
-def analyze_concession_combinations() -> dict[str, Any]:
-    """
-    分析卖品组合
-    - 从卖品销售明细中分析品类搭配
-    - 识别热销组合和冷门组合
-    - 分析时段分布
-    """
-    path = _find_latest_file("卖品销售明细查询")
-    if not path:
-        return {"status": "no_data", "message": "未找到卖品销售明细报表"}
-
-    rows = _parse_sheet(path)
-    if not rows:
-        return {"status": "no_data", "message": "报表数据为空"}
-
-    # 按品类聚合
-    category_stats: dict[str, dict] = defaultdict(lambda: {
-        "count": 0, "amount": 0.0, "items": defaultdict(lambda: {"count": 0, "amount": 0.0}),
-    })
-
-    # 按订单（同时间+同销售员）聚合，用于分析组合
-    order_groups: dict[str, list[dict]] = defaultdict(list)
-
-    # 按时段统计
-    hour_stats: dict[str, dict] = defaultdict(lambda: {"count": 0, "amount": 0.0})
-
-    for r in rows:
-        cinema = str(r.get("影院名称", "")).strip()
-        if CINEMA_NAME not in cinema:
-            continue
-
-        cat = str(r.get("卖品大类", "")).strip()
-        sub_cat = str(r.get("一级分类", "")).strip()
-        product_name = str(r.get("卖品名称", "")).strip()
-        amount = float(r.get("支付金额（元）", 0) or 0)
-        quantity = int(float(r.get("销售数量", 0) or 0))
-        sale_time = str(r.get("销售时间", "") or r.get("消费时间", "") or "").strip()
-        seller = str(r.get("销售员", "")).strip()
-
-        if not product_name:
-            continue
-
-        # 品类统计
-        cat_key = cat if cat else "未分类"
-        category_stats[cat_key]["count"] += quantity
-        category_stats[cat_key]["amount"] += amount
-        category_stats[cat_key]["items"][product_name]["count"] += quantity
-        category_stats[cat_key]["items"][product_name]["amount"] += amount
-
-        # 时段统计
-        if sale_time and len(sale_time) >= 2:
-            hour = sale_time[:2] if sale_time[1].isdigit() else ""
+            hour = _hour_label(sale_time)
             if hour:
-                hour_stats[f"{hour}:00"]["count"] += quantity
-                hour_stats[f"{hour}:00"]["amount"] += amount
+                hour_stats[hour]["count"] += count
+                hour_stats[hour]["amount"] += amount
 
-        # 组合分析（同销售员+相近时间的订单视为同一笔）
-        if seller and seller not in ("None", "--"):
-            order_key = f"{seller}_{sale_time[:13] if sale_time else ''}"
-            order_groups[order_key].append({
-                "product": product_name,
-                "category": cat,
-                "amount": amount,
-                "quantity": quantity,
-            })
+            group_key = f"{snapshot_date}:{operator or 'unknown'}:{sale_time[:5] if sale_time else 'all'}"
+            order_groups[group_key].append({"product": name, "amount": amount, "quantity": count})
 
-    # 分析组合
-    combo_counter: dict[tuple, int] = defaultdict(int)
-    combo_amount: dict[tuple, float] = defaultdict(float)
+    if rows_count == 0:
+        return {"status": "no_data", "source": "daily_snapshots", "message": "暂无数据库卖品明细"}
 
-    for order_key, items in order_groups.items():
-        products = list(set(item["product"] for item in items))
-        if len(products) >= 2:
-            # 生成2-item和3-item组合
-            for r in range(2, min(4, len(products) + 1)):
-                for combo in combinations(sorted(products), r):
-                    combo_counter[combo] += 1
-                    combo_amount[combo] += sum(item["amount"] for item in items)
-
-    # 排序组合
-    hot_combos = sorted(combo_counter.items(), key=lambda x: -x[1])[:10]
-    hot_combos_list = [
-        {
-            "items": list(combo),
-            "count": count,
-            "total_amount": round(combo_amount[combo], 2),
-            "avg_amount": round(combo_amount[combo] / count, 2) if count else 0,
-        }
-        for combo, count in hot_combos
-        if count >= 2  # 至少出现2次
+    category_details = _category_details(category_stats)
+    hot_combinations = _hot_combinations(order_groups)
+    hour_distribution = [
+        {"hour": hour, "count": int(stats["count"]), "amount": round(stats["amount"], 2)}
+        for hour, stats in sorted(hour_stats.items())
     ]
-
-    # 品类明细
-    category_details = []
-    for cat, stats in category_stats.items():
-        items_list = [
-            {"name": name, "count": data["count"], "amount": round(data["amount"], 2)}
-            for name, data in stats["items"].items()
-        ]
-        items_list.sort(key=lambda x: -x["amount"])
-        category_details.append({
-            "category": cat,
-            "total_count": stats["count"],
-            "total_amount": round(stats["amount"], 2),
-            "top_items": items_list[:10],
-        })
-    category_details.sort(key=lambda x: -x["total_amount"])
-
-    # 时段分布
-    hour_distribution = []
-    for hour, stats in sorted(hour_stats.items()):
-        hour_distribution.append({
-            "hour": hour,
-            "count": stats["count"],
-            "amount": round(stats["amount"], 2),
-        })
-
-    # 时段高峰识别
-    if hour_distribution:
-        avg_hourly_amount = sum(h["amount"] for h in hour_distribution) / len(hour_distribution)
-        peak_hours = [h["hour"] for h in hour_distribution if h["amount"] > avg_hourly_amount * 1.5]
-        low_hours = [h["hour"] for h in hour_distribution if h["amount"] < avg_hourly_amount * 0.5 and h["amount"] > 0]
-    else:
-        peak_hours = []
-        low_hours = []
-
-    total_amount = sum(s["amount"] for s in category_stats.values())
-    total_count = sum(s["count"] for s in category_stats.values())
+    total_amount = sum(item["amount"] for item in category_details)
+    total_count = sum(item["count"] for item in category_details)
+    avg_hour_amount = sum(item["amount"] for item in hour_distribution) / len(hour_distribution) if hour_distribution else 0
+    peak_hours = [item["hour"] for item in hour_distribution if avg_hour_amount and item["amount"] > avg_hour_amount * 1.5]
+    low_hours = [item["hour"] for item in hour_distribution if avg_hour_amount and 0 < item["amount"] < avg_hour_amount * 0.5]
 
     return {
         "status": "ok",
-        "source": path.name,
-        "cinema": CINEMA_NAME,
+        "source": "daily_snapshots",
         "category_details": category_details,
-        "hot_combinations": hot_combos_list,
+        "hot_combinations": hot_combinations,
         "hour_distribution": hour_distribution,
         "peak_hours": peak_hours,
         "low_hours": low_hours,
         "summary": {
             "total_categories": len(category_details),
-            "total_items": sum(len(c["top_items"]) for c in category_details),
-            "total_count": total_count,
+            "total_items": int(total_count),
+            "total_sku": len(item_stats),
             "total_amount": round(total_amount, 2),
+            "avg_daily_revenue": round(total_amount / len(snapshots), 2) if snapshots else 0,
         },
     }
 
 
-def generate_concession_suggestions() -> dict[str, Any]:
-    """
-    生成卖品建议
-    - 推荐套餐组合
-    - 优化定价策略
-    """
-    analysis = analyze_concession_combinations()
+def generate_concession_suggestions(repository: DashboardRepository, days: int = 30) -> dict[str, Any]:
+    analysis = analyze_concession_combinations(repository, days)
     if analysis["status"] != "ok":
         return analysis
 
-    suggestions: list[dict[str, Any]] = []
-    categories = analysis.get("category_details", [])
-    hot_combos = analysis.get("hot_combinations", [])
-    peak_hours = analysis.get("peak_hours", [])
-    low_hours = analysis.get("low_hours", [])
+    categories = analysis["category_details"]
+    hot_combinations = analysis["hot_combinations"]
     total_amount = analysis["summary"]["total_amount"]
+    suggestions: list[dict[str, Any]] = []
+    combos: list[dict[str, Any]] = []
+    pricing_suggestions: list[dict[str, Any]] = []
 
-    # 1. 热销组合推荐
-    if hot_combos:
-        top_combo = hot_combos[0]
-        suggestions.append({
-            "category": "套餐组合",
-            "title": "热销组合推荐为正式套餐",
-            "detail": f"最热销组合：{' + '.join(top_combo['items'])}，已出现{top_combo['count']}次",
-            "suggestion": f"建议将'{' + '.join(top_combo['items'])}'设为正式套餐，定价{top_combo['avg_amount']*0.85:.0f}元（比单买优惠15%）",
-            "priority": "high",
-            "potential_impact": f"预计可提升套餐转化率20%+",
-        })
+    if hot_combinations:
+        top_combo = hot_combinations[0]
+        combo_price = round(top_combo["avg_amount"] * 0.9, 2)
+        combos.append(
+            {
+                "name": " + ".join(top_combo["items"]),
+                "items": top_combo["items"],
+                "price": combo_price,
+                "expected_revenue": round(combo_price * max(top_combo["count"], 1), 2),
+                "reason": f"该组合在数据库快照中共同出现 {top_combo['count']} 次",
+            }
+        )
+        suggestions.append(
+            {
+                "category": "套餐组合",
+                "title": "把高频组合做成套餐",
+                "detail": f"{' + '.join(top_combo['items'])} 共同出现 {top_combo['count']} 次",
+                "suggestion": f"建议设置组合套餐价 {combo_price:.0f} 元，作为前台优先推荐项",
+                "priority": "high",
+            }
+        )
 
-    # 2. 品类优化
     if categories:
-        top_cat = categories[0]
-        suggestions.append({
-            "category": "品类优化",
-            "title": f"核心品类：{top_cat['category']}",
-            "detail": f"{top_cat['category']}贡献{top_cat['total_amount']}元，占比{top_cat['total_amount']/total_amount*100:.1f}%",
-            "suggestion": f"建议保持{top_cat['category']}的充足库存，并开发该品类下的新品",
-            "priority": "medium",
-        })
-
-        if len(categories) > 1:
-            low_cats = [c for c in categories if c["total_amount"] < total_amount * 0.05]
-            if low_cats:
-                names = "、".join(c["category"] for c in low_cats)
-                suggestions.append({
-                    "category": "品类优化",
-                    "title": f"低效品类优化：{names}",
-                    "detail": f"{names}合计占比不足5%",
-                    "suggestion": "建议评估是否继续销售低效品类，或通过捆绑销售提升其销量",
-                    "priority": "low",
-                })
-
-    # 3. 时段策略
-    if peak_hours:
-        suggestions.append({
-            "category": "时段策略",
-            "title": "高峰时段卖品策略",
-            "detail": f"卖品销售高峰：{'、'.join(peak_hours)}",
-            "suggestion": "建议在高峰时段增加卖品库存和人手，提前备货减少等待时间",
-            "priority": "high",
-        })
-
-    if low_hours:
-        suggestions.append({
-            "category": "时段策略",
-            "title": "低峰时段促销建议",
-            "detail": f"卖品销售低谷：{'、'.join(low_hours)}",
-            "suggestion": "建议在低峰时段推出限时折扣或特价套餐，提升卖品渗透率",
-            "priority": "medium",
-        })
-
-    # 4. 套餐设计建议
-    if categories and len(categories) >= 2:
-        top_items_by_cat = {}
-        for cat in categories[:3]:
-            if cat["top_items"]:
-                top_items_by_cat[cat["category"]] = cat["top_items"][0]
-
-        if len(top_items_by_cat) >= 2:
-            combo_items = list(top_items_by_cat.values())
-            combo_names = " + ".join(item["name"] for item in combo_items[:2])
-            combo_price = sum(item["amount"] / max(item["count"], 1) for item in combo_items[:2])
-            suggestions.append({
-                "category": "套餐设计",
-                "title": "跨品类套餐建议",
-                "detail": f"建议组合不同品类的热销品：{combo_names}",
-                "suggestion": f"设计跨品类套餐，定价{combo_price*0.8:.0f}元（比单买优惠20%），提升客单价",
+        top_category = categories[0]
+        share = top_category["amount"] / total_amount * 100 if total_amount else 0
+        suggestions.append(
+            {
+                "category": "品类优化",
+                "title": f"{top_category['category']} 是当前核心品类",
+                "detail": f"贡献 {top_category['amount']} 元，占比 {share:.1f}%",
+                "suggestion": f"保持 {top_category['category']} 库存和陈列优先级",
                 "priority": "medium",
-            })
-
-    # 5. 定价策略
-    if categories:
-        top_items = []
-        for cat in categories[:3]:
-            for item in cat["top_items"][:3]:
-                avg_price = item["amount"] / max(item["count"], 1)
-                top_items.append({"name": item["name"], "avg_price": avg_price})
-
-        if top_items:
-            suggestions.append({
-                "category": "定价策略",
-                "title": "价格带分析",
-                "detail": f"热销品均价区间：{min(i['avg_price'] for i in top_items):.0f}-{max(i['avg_price'] for i in top_items):.0f}元",
-                "suggestion": "建议套餐定价集中在20-40元区间，这是顾客最容易接受的价格带",
-                "priority": "medium",
-            })
-
-    # 排序
-    priority_map = {"high": 0, "medium": 1, "low": 2}
-    suggestions.sort(key=lambda x: priority_map.get(x["priority"], 9))
+            }
+        )
+        for item in top_category["top_items"][:3]:
+            current_price = item["amount"] / max(item["count"], 1)
+            pricing_suggestions.append(
+                {
+                    "item": item["name"],
+                    "current_price": round(current_price, 2),
+                    "suggested_price": round(current_price, 2),
+                    "reason": "数据库显示该商品为高贡献商品，暂不建议降价",
+                }
+            )
 
     return {
         "status": "ok",
+        "source": "daily_snapshots",
         "title": "卖品组合推荐建议",
-        "conclusion": f"分析{analysis['summary']['total_categories']}个品类、{analysis['summary']['total_items']}种商品，生成{len(suggestions)}条优化建议",
+        "conclusion": f"基于数据库快照分析 {analysis['summary']['total_categories']} 个品类、{analysis['summary']['total_sku']} 个 SKU",
         "evidence": [
-            f"卖品总销售额: {total_amount}元",
-            f"品类数量: {analysis['summary']['total_categories']}",
-            f"热销组合数: {len(hot_combos)}",
-            f"销售高峰时段: {'、'.join(peak_hours) if peak_hours else '无明显高峰'}",
-            f"销售低谷时段: {'、'.join(low_hours) if low_hours else '无明显低谷'}",
+            f"卖品销售额: {total_amount}元",
+            f"卖品数量: {analysis['summary']['total_items']}",
+            f"热销组合数: {len(hot_combinations)}",
         ],
-        "confidence": 0.80,
-        "suggestions": suggestions,
-        "suggested_actions": [s["suggestion"] for s in suggestions[:5]],
-        "hot_combinations": hot_combos,
+        "confidence": 0.82,
+        "summary": {
+            "total_sku": analysis["summary"]["total_sku"],
+            "hot_count": len(hot_combinations),
+            "cold_count": len([item for item in categories if total_amount and item["amount"] < total_amount * 0.05]),
+            "avg_daily_revenue": analysis["summary"]["avg_daily_revenue"],
+            "total_items": analysis["summary"]["total_items"],
+        },
+        "suggestions": sorted(suggestions, key=lambda item: {"high": 0, "medium": 1, "low": 2}.get(item["priority"], 9)),
+        "suggested_actions": [item["suggestion"] for item in suggestions],
         "category_breakdown": [
-            {"category": c["category"], "amount": c["total_amount"], "count": c["total_count"]}
-            for c in categories
+            {"category": item["category"], "amount": item["amount"], "count": item["count"]}
+            for item in categories
         ],
-        "hour_distribution": analysis.get("hour_distribution", []),
+        "hot_combinations": hot_combinations,
+        "combos": combos,
+        "pricing_suggestions": pricing_suggestions,
+        "hour_distribution": analysis["hour_distribution"],
     }
+
+
+def _category_details(category_stats: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    details = []
+    for category, stats in category_stats.items():
+        top_items = [
+            {"name": name, "count": int(data["count"]), "amount": round(data["amount"], 2)}
+            for name, data in stats["items"].items()
+        ]
+        top_items.sort(key=lambda item: -item["amount"])
+        details.append(
+            {
+                "category": category,
+                "total_count": int(stats["count"]),
+                "count": int(stats["count"]),
+                "total_amount": round(stats["amount"], 2),
+                "amount": round(stats["amount"], 2),
+                "top_items": top_items[:10],
+            }
+        )
+    details.sort(key=lambda item: -item["amount"])
+    return details
+
+
+def _hot_combinations(order_groups: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    combo_count: dict[tuple[str, ...], int] = defaultdict(int)
+    combo_amount: dict[tuple[str, ...], float] = defaultdict(float)
+    for items in order_groups.values():
+        names = sorted({item["product"] for item in items if item.get("product")})
+        if len(names) < 2:
+            continue
+        amount = sum(_number(item.get("amount")) for item in items)
+        for combo in combinations(names, 2):
+            combo_count[combo] += 1
+            combo_amount[combo] += amount
+    combos = []
+    for combo, count in sorted(combo_count.items(), key=lambda item: (-item[1], item[0]))[:10]:
+        total = combo_amount[combo]
+        combos.append(
+            {
+                "items": list(combo),
+                "count": count,
+                "total_amount": round(total, 2),
+                "avg_amount": round(total / count, 2) if count else 0,
+            }
+        )
+    return combos
+
+
+def _parse_raw(raw_json: Any) -> dict[str, Any]:
+    if isinstance(raw_json, dict):
+        return raw_json
+    if isinstance(raw_json, str):
+        try:
+            return json.loads(raw_json)
+        except json.JSONDecodeError:
+            return {}
+    return {}
+
+
+def _hour_label(value: str) -> str:
+    value = _text(value)
+    if len(value) >= 2 and value[:2].isdigit():
+        return f"{value[:2]}:00"
+    if len(value) >= 13 and value[11:13].isdigit():
+        return f"{value[11:13]}:00"
+    return ""
+
+
+def _text(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _number(value: Any) -> float:
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0

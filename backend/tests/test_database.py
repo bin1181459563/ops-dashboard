@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from app.core.database import DashboardRepository
 from app.models.schemas import UnifiedMetric
@@ -11,7 +11,7 @@ def test_database_initializes_required_tables(tmp_path):
     repo.initialize()
 
     table_names = repo.table_names()
-    assert {"revenue", "orders", "usage", "alerts", "sync_logs", "daily_snapshots"}.issubset(table_names)
+    assert {"revenue", "orders", "usage", "alerts", "sync_logs", "daily_snapshots", "collection_backfills"}.issubset(table_names)
 
 
 def test_repository_persists_and_reads_latest_metrics(tmp_path):
@@ -106,3 +106,77 @@ def test_repository_persists_collection_runs(tmp_path):
     assert runs[0]["excluded_count"] == 0
     assert runs[0]["platform_results"][0]["platform"] == "xiaotie"
     assert runs[0]["platform_results"][0]["duration_ms"] == 123
+
+
+def test_repository_tracks_collection_backfill_lifecycle(tmp_path):
+    repo = DashboardRepository(tmp_path / "ops_dashboard.db")
+    repo.initialize()
+    now = datetime(2026, 6, 29, 9, 0, tzinfo=timezone.utc)
+
+    repo.enqueue_collection_backfill(
+        platform="fenghuang",
+        business_type="cinema",
+        store_id="cinema_feicuicheng",
+        target_date="2026-06-28",
+        message="首次采集失败",
+        next_retry_at=now,
+    )
+    repo.enqueue_collection_backfill(
+        platform="fenghuang",
+        business_type="cinema",
+        store_id="cinema_feicuicheng",
+        target_date="2026-06-28",
+        message="重复入队只更新原因",
+        next_retry_at=now,
+    )
+
+    due = repo.due_collection_backfills(platform="fenghuang", now=now)
+
+    assert len(due) == 1
+    assert due[0]["target_date"] == "2026-06-28"
+    assert due[0]["message"] == "重复入队只更新原因"
+    assert due[0]["attempts"] == 0
+
+    retry_at = now + timedelta(hours=1)
+    repo.mark_collection_backfill_failed(
+        due[0]["id"],
+        message="补采仍失败",
+        now=now,
+        next_retry_at=retry_at,
+        max_attempts=3,
+    )
+
+    assert repo.due_collection_backfills(platform="fenghuang", now=now) == []
+    due_later = repo.due_collection_backfills(platform="fenghuang", now=retry_at)
+    assert due_later[0]["attempts"] == 1
+    assert due_later[0]["status"] == "pending"
+
+    repo.mark_collection_backfill_succeeded(due_later[0]["id"], now=retry_at)
+
+    assert repo.due_collection_backfills(platform="fenghuang", now=retry_at + timedelta(hours=1)) == []
+
+
+def test_repository_marks_backfill_dead_after_max_attempts(tmp_path):
+    repo = DashboardRepository(tmp_path / "ops_dashboard.db")
+    repo.initialize()
+    now = datetime(2026, 6, 29, 9, 0, tzinfo=timezone.utc)
+
+    repo.enqueue_collection_backfill(
+        platform="fenghuang",
+        business_type="cinema",
+        store_id="cinema_feicuicheng",
+        target_date="2026-06-28",
+        message="失败",
+        next_retry_at=now,
+    )
+    due = repo.due_collection_backfills(platform="fenghuang", now=now)
+
+    repo.mark_collection_backfill_failed(
+        due[0]["id"],
+        message="达到上限",
+        now=now,
+        next_retry_at=now + timedelta(hours=1),
+        max_attempts=1,
+    )
+
+    assert repo.due_collection_backfills(platform="fenghuang", now=now + timedelta(hours=2)) == []

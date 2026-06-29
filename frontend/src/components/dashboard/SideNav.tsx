@@ -18,14 +18,15 @@ interface NavItem {
 /** 导航列表配置 */
 const NAV_ITEMS: NavItem[] = [
   { href: "/dashboard", label: "今日经营中心", icon: "📊" },
-  { href: "/dashboard/alerts", label: "AI 预警", icon: "🔔" },
   { href: "/dashboard/reports", label: "AI 报告", icon: "📋" },
+  { href: "/dashboard/daily-briefing", label: "每日简报", icon: "📣" },
+  { href: "/dashboard/handover-assistant", label: "交接助手", icon: "🗂️" },
+  { href: "/dashboard/procurement-reimbursement", label: "采购报销", icon: "🧾" },
   { href: "/dashboard/customer-wake-up", label: "客户唤醒", icon: "💤" },
   { href: "/dashboard/screening-suggestions", label: "排片建议", icon: "🎬" },
   { href: "/dashboard/revenue-forecast", label: "收入预测", icon: "📈" },
   { href: "/dashboard/cross-business", label: "多业务联动", icon: "🔗" },
   { href: "/dashboard/data-quality", label: "数据可信度", icon: "✅" },
-  { href: "/dashboard/audit", label: "审计日志", icon: "📝" },
 ];
 
 interface SideNavProps {

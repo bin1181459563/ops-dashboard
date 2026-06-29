@@ -27,3 +27,15 @@ tmp/
 .DS_Store
 *.backup
 backend/data/
+
+# 业务恢复数据（含采购记录等敏感信息）
+restored-data/
+
+# 临时脚本
+scripts/test_procurement_restore.mjs
+
+# 系统文件
+.DS_Store
+
+# 数据库备份文件
+data/*.backup*

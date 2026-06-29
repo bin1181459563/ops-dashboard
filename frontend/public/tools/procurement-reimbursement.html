@@ -1,0 +1,844 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>影城采购报销极简版</title>
+  <style>
+    :root {
+      --bg: #f6f7f4;
+      --panel: #ffffff;
+      --ink: #20231f;
+      --muted: #6f756d;
+      --line: #dde2d8;
+      --brand: #145c52;
+      --brand-2: #e6b450;
+      --danger: #b3261e;
+      --ok: #197348;
+      --shadow: 0 16px 40px rgba(32, 35, 31, .08);
+      font-family: "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--ink); }
+    .wrap { max-width: 1280px; margin: 0 auto; padding: 28px; }
+    header { display: flex; justify-content: space-between; gap: 18px; align-items: end; margin-bottom: 18px; }
+    h1 { margin: 0; font-size: 28px; letter-spacing: 0; }
+    .sub { color: var(--muted); margin-top: 6px; font-size: 14px; }
+    .grid { display: grid; grid-template-columns: 370px 1fr; gap: 18px; align-items: start; }
+    .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: var(--shadow); }
+    .pad { padding: 18px; }
+    .title { font-size: 17px; font-weight: 800; margin: 0 0 14px; }
+    .form { display: grid; gap: 12px; }
+    label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+    input, select {
+      width: 100%; height: 40px; border: 1px solid var(--line); border-radius: 6px;
+      padding: 0 10px; font-size: 14px; background: #fff; color: var(--ink);
+    }
+    input:focus, select:focus { outline: 2px solid rgba(20, 92, 82, .18); border-color: var(--brand); }
+    button {
+      height: 40px; border: 1px solid var(--line); border-radius: 6px; background: #fff;
+      color: var(--ink); padding: 0 14px; cursor: pointer; font-weight: 700;
+    }
+    button.primary { background: var(--brand); color: #fff; border-color: var(--brand); }
+    button.danger { color: var(--danger); }
+    .actions { display: flex; flex-wrap: wrap; gap: 10px; }
+    .stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 18px; }
+    .stat { padding: 16px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; box-shadow: var(--shadow); }
+    .stat .k { color: var(--muted); font-size: 13px; }
+    .stat .v { font-size: 26px; font-weight: 900; margin-top: 8px; }
+    .toolbar { display: grid; grid-template-columns: 145px 145px 170px 160px 1fr auto; gap: 10px; margin-bottom: 12px; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th, td { padding: 11px 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: middle; }
+    th { color: var(--muted); font-size: 12px; background: #fbfcfa; position: sticky; top: 0; }
+    .table-wrap { max-height: 430px; overflow: auto; border-top: 1px solid var(--line); }
+    .tag { display: inline-flex; align-items: center; height: 24px; border-radius: 999px; padding: 0 9px; font-size: 12px; border: 1px solid var(--line); }
+    .tag.ok { color: var(--ok); background: #edf8f1; border-color: #cdebd7; }
+    .tag.warn { color: #8a5b00; background: #fff7df; border-color: #f0dc9e; }
+    .tag.gray { color: var(--muted); background: #f3f4f1; }
+    .money { font-weight: 800; }
+    .empty { padding: 38px; text-align: center; color: var(--muted); }
+    .summary { margin-top: 18px; }
+    .summary-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 10px; }
+    .sum-card { border: 1px solid var(--line); border-radius: 8px; padding: 12px; background: #fbfcfa; }
+    .sum-card strong { display: block; margin-bottom: 7px; }
+    .hidden-file { display: none; }
+    @media (max-width: 900px) {
+      .grid, .stats, .toolbar { grid-template-columns: 1fr; }
+      header { align-items: start; flex-direction: column; }
+      .wrap { padding: 16px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div>
+        <h1>影城采购报销极简版</h1>
+        <div class="sub">只记录所属店、名称、数量、金额、分类、普票/专票和报销状态。数据保存在本机浏览器。</div>
+      </div>
+      <div class="actions">
+        <button id="exportCsv">导出CSV</button>
+        <button id="exportShangying">导出上影报销单</button>
+        <button id="exportJiayi">导出佳翼报销单</button>
+        <select id="exportHistory" style="width:auto; min-width:220px"></select>
+        <button id="undoExport">撤回所选导出</button>
+        <button id="restoreFilteredReimbursed">批量恢复已报销</button>
+        <button id="exportJson">备份JSON</button>
+        <button id="importBtn">导入JSON</button>
+        <input id="importFile" class="hidden-file" type="file" accept="application/json">
+      </div>
+    </header>
+
+    <section class="stats">
+      <div class="stat"><div class="k">筛选期间采购总额</div><div class="v" id="monthTotal">￥0.00</div></div>
+      <div class="stat"><div class="k">筛选期间待报销</div><div class="v" id="monthPending">￥0.00</div></div>
+      <div class="stat"><div class="k">筛选期间采购笔数</div><div class="v" id="monthCount">0</div></div>
+    </section>
+
+    <main class="grid">
+      <section class="panel pad">
+        <h2 class="title">新增采购</h2>
+        <form id="form" class="form">
+          <div>
+            <label>采购日期</label>
+            <input name="date" type="date" required>
+          </div>
+          <div>
+            <label>所属店/公司</label>
+            <select name="store">
+              <option>上影国际影城翡翠城</option>
+              <option>绵阳佳翼商管</option>
+            </select>
+          </div>
+          <div>
+            <label>名称</label>
+            <input name="name" required placeholder="如 A4纸、灭火器贴、清洁剂">
+          </div>
+          <div>
+            <label>分类</label>
+            <div style="display:flex; gap:8px;">
+              <select name="category" id="categorySelect" required style="flex:1;"></select>
+              <button type="button" id="manageCategoryBtn" style="white-space:nowrap;">管理分类</button>
+            </div>
+          </div>
+          <div>
+            <label>数量</label>
+            <input name="quantity" type="number" min="0.01" step="0.01" required value="1">
+          </div>
+          <div>
+            <label>单位</label>
+            <input name="unit" list="unitList" placeholder="个、箱、包、张">
+            <datalist id="unitList">
+              <option value="个">
+              <option value="箱">
+              <option value="包">
+              <option value="张">
+              <option value="套">
+              <option value="瓶">
+              <option value="件">
+              <option value="盒">
+            </datalist>
+          </div>
+          <div>
+            <label>金额</label>
+            <input name="amount" type="number" min="0" step="0.01" required placeholder="实付金额">
+          </div>
+          <div>
+            <label>发票类型</label>
+            <select name="invoiceType">
+              <option>普票</option>
+              <option>专票</option>
+              <option>收据</option>
+            </select>
+          </div>
+          <div>
+            <label>报销状态</label>
+            <select name="reimburse">
+              <option>未报销</option>
+              <option>已报销</option>
+              <option>不需报销</option>
+            </select>
+          </div>
+          <div class="actions">
+            <button class="primary" id="submitBtn" type="submit">保存</button>
+            <button id="cancelEdit" type="button" style="display:none">取消编辑</button>
+          </div>
+        </form>
+      </section>
+
+      <section>
+        <div class="panel pad">
+          <h2 class="title">采购记录</h2>
+          <div class="toolbar">
+            <input id="startMonth" type="month" title="开始月份">
+            <input id="endMonth" type="month" title="结束月份">
+            <select id="storeFilter"><option value="">全部店/公司</option></select>
+            <select id="categoryFilter"><option value="">全部分类</option></select>
+            <input id="search" placeholder="搜索名称">
+            <button id="clearFilters">清空</button>
+          </div>
+          <div id="table"></div>
+        </div>
+
+        <div class="panel pad summary">
+          <h2 class="title">分类采购统计</h2>
+          <div id="summary"></div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- 分类管理弹窗 -->
+  <div id="categoryModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.4); z-index:999; align-items:center; justify-content:center;">
+    <div style="background:#fff; border-radius:12px; padding:24px; width:360px; max-height:70vh; display:flex; flex-direction:column; box-shadow:0 20px 60px rgba(0,0,0,.2);">
+      <h3 style="margin:0 0 16px; font-size:18px;">管理采购分类</h3>
+      <div id="categoryListManage" style="flex:1; overflow:auto; margin-bottom:16px;"></div>
+      <div style="display:flex; gap:8px;">
+        <input id="newCategoryInput" placeholder="输入新分类名称" style="flex:1; height:36px; border:1px solid var(--line); border-radius:6px; padding:0 10px;">
+        <button id="addCategoryBtn" class="primary" style="height:36px; padding:0 14px;">添加</button>
+      </div>
+      <button id="closeCategoryModal" style="margin-top:12px; height:36px;">关闭</button>
+    </div>
+  </div>
+
+  <script src="/tools/procurement-reimbursement-restored.js"></script>
+  <script>
+    const KEY = "cinema_simple_purchase_v1";
+    const LAST_EXPORT_KEY = "cinema_simple_purchase_last_export_v1";
+    const EXPORT_HISTORY_KEY = "cinema_simple_purchase_last_export_history_v1";
+    const DEFAULT_CATEGORIES = ["办公行政", "消防安全", "保洁清洁", "设备备件", "营运耗材", "其他"];
+    const CATEGORY_KEY = "cinema_simple_purchase_categories_v1";
+    const stores = ["上影国际影城翡翠城", "绵阳佳翼商管"];
+    let records = load();
+    let editingId = "";
+
+    // 加载分类列表（默认 + 用户自定义）
+    function loadCategories() {
+      try {
+        const saved = JSON.parse(localStorage.getItem(CATEGORY_KEY) || "null");
+        if (Array.isArray(saved) && saved.length) return saved;
+      } catch {}
+      return [...DEFAULT_CATEGORIES];
+    }
+    function saveCategories(list) {
+      localStorage.setItem(CATEGORY_KEY, JSON.stringify(list));
+    }
+    function getAllCategories() {
+      const cats = new Set(loadCategories());
+      records.forEach(r => { if (r.category) cats.add(r.category); });
+      return [...cats];
+    }
+    let categories = loadCategories();
+
+    const els = {
+      form: document.getElementById("form"),
+      table: document.getElementById("table"),
+      summary: document.getElementById("summary"),
+      startMonth: document.getElementById("startMonth"),
+      endMonth: document.getElementById("endMonth"),
+      storeFilter: document.getElementById("storeFilter"),
+      categoryFilter: document.getElementById("categoryFilter"),
+      search: document.getElementById("search"),
+      monthTotal: document.getElementById("monthTotal"),
+      monthPending: document.getElementById("monthPending"),
+      monthCount: document.getElementById("monthCount"),
+      submitBtn: document.getElementById("submitBtn"),
+      cancelEdit: document.getElementById("cancelEdit"),
+      exportHistory: document.getElementById("exportHistory"),
+      undoExport: document.getElementById("undoExport"),
+      restoreFilteredReimbursed: document.getElementById("restoreFilteredReimbursed")
+    };
+
+    function today() { return new Date().toISOString().slice(0, 10); }
+    function monthKey(date) { return (date || today()).slice(0, 7); }
+    function selectedRange() {
+      let start = els.startMonth.value || monthKey(today());
+      let end = els.endMonth.value || start;
+      if (start > end) [start, end] = [end, start];
+      return { start, end, label: start === end ? start : `${start}至${end}` };
+    }
+    function inSelectedRange(date) {
+      const { start, end } = selectedRange();
+      const m = monthKey(date);
+      return m >= start && m <= end;
+    }
+    function money(value) { return "￥" + Number(value || 0).toFixed(2); }
+    function esc(value) {
+      return String(value ?? "").replace(/[&<>"']/g, s => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;" }[s]));
+    }
+    function load() {
+      try {
+        const saved = localStorage.getItem(KEY);
+        if (saved) {
+          const data = JSON.parse(saved);
+          if (Array.isArray(data)) return restoreEmptyPurchaseRecords(data);
+        }
+        return restoreEmptyPurchaseRecords();
+      } catch { return []; }
+    }
+    function restoreEmptyPurchaseRecords(existing = []) {
+      const restored = Array.isArray(window.RESTORED_PURCHASE_RECORDS) ? window.RESTORED_PURCHASE_RECORDS : [];
+      if (!restored.length) return existing;
+      const ids = new Set(existing.map(record => record && record.id).filter(Boolean));
+      const missing = restored.filter(record => record && record.id && !ids.has(record.id));
+      if (!missing.length) return existing;
+      const merged = [...existing, ...missing];
+      localStorage.setItem(KEY, JSON.stringify(merged));
+      return merged;
+    }
+    function save() { localStorage.setItem(KEY, JSON.stringify(records)); }
+    function loadLastExport() {
+      try {
+        const data = JSON.parse(localStorage.getItem(LAST_EXPORT_KEY) || "null");
+        return data && Array.isArray(data.ids) ? data : null;
+      } catch { return null; }
+    }
+    function saveLastExport(data) { localStorage.setItem(LAST_EXPORT_KEY, JSON.stringify(data)); }
+    function clearLastExport() { localStorage.removeItem(LAST_EXPORT_KEY); }
+    function loadExportHistory() {
+      try {
+        const data = JSON.parse(localStorage.getItem(EXPORT_HISTORY_KEY) || "[]");
+        const history = Array.isArray(data) ? data.filter(item => item && item.id && Array.isArray(item.ids)) : [];
+        if (history.length) return history;
+        const legacy = loadLastExport();
+        if (!legacy || !legacy.ids.length) return [];
+        return [{
+          id: legacy.id || "legacy_last_export",
+          label: legacy.label || `最近一次导出 · ${legacy.period || ""} · ${legacy.ids.length}条`,
+          ...legacy
+        }];
+      } catch { return []; }
+    }
+    function saveExportHistory(history) {
+      localStorage.setItem(EXPORT_HISTORY_KEY, JSON.stringify(history.slice(0, 20)));
+      const latest = history[0];
+      if (latest) saveLastExport(latest);
+      else clearLastExport();
+    }
+
+    function filtered() {
+      const s = els.storeFilter.value;
+      const c = els.categoryFilter.value;
+      const q = els.search.value.trim().toLowerCase();
+      return records.filter(r =>
+        inSelectedRange(r.date) &&
+        (!s || (r.store || stores[0]) === s) &&
+        (!c || r.category === c) &&
+        (!q || r.name.toLowerCase().includes(q))
+      );
+    }
+
+    function render() {
+      renderFilters();
+      renderStats();
+      renderTable();
+      renderSummary();
+      renderUndoExport();
+    }
+
+    function renderFilters() {
+      const selectedStore = els.storeFilter.value;
+      els.storeFilter.innerHTML = `<option value="">全部店/公司</option>` + stores.map(s => `<option ${selectedStore === s ? "selected" : ""}>${s}</option>`).join("");
+      const selected = els.categoryFilter.value;
+      els.categoryFilter.innerHTML = `<option value="">全部分类</option>` + categories.map(c => `<option ${selected === c ? "selected" : ""}>${c}</option>`).join("");
+      // 更新表单分类下拉
+      const catSelect = document.getElementById("categorySelect");
+      if (catSelect) {
+        const curVal = catSelect.value;
+        catSelect.innerHTML = categories.map(c => `<option ${curVal === c ? "selected" : ""}>${c}</option>`).join("");
+      }
+    }
+
+    function renderStats() {
+      const store = els.storeFilter.value;
+      const list = records.filter(r => inSelectedRange(r.date) && (!store || (r.store || stores[0]) === store));
+      const total = list.reduce((s, r) => s + Number(r.amount || 0), 0);
+      const pending = list.filter(r => r.reimburse === "未报销").reduce((s, r) => s + Number(r.amount || 0), 0);
+      els.monthTotal.textContent = money(total);
+      els.monthPending.textContent = money(pending);
+      els.monthCount.textContent = list.length;
+    }
+
+    function renderTable() {
+      const list = filtered().sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+      if (!list.length) {
+        els.table.innerHTML = `<div class="empty">暂无记录</div>`;
+        return;
+      }
+      els.table.innerHTML = `<div class="table-wrap"><table>
+        <thead><tr><th>日期</th><th>店/公司</th><th>名称</th><th>分类</th><th>数量</th><th>金额</th><th>票种</th><th>报销</th><th>操作</th></tr></thead>
+        <tbody>${list.map(r => `<tr>
+          <td>${esc(r.date)}</td>
+          <td>${esc(r.store || stores[0])}</td>
+          <td><strong>${esc(r.name)}</strong></td>
+          <td>${esc(r.category)}</td>
+          <td>${Number(r.quantity || 0)} ${esc(r.unit || "")}</td>
+          <td class="money">${money(r.amount)}</td>
+          <td><span class="tag gray">${esc(r.invoiceType)}</span></td>
+          <td>${reimburseTag(r.reimburse)}</td>
+          <td>
+            ${r.reimburse === "未报销" ? `<button data-reimbursed="${r.id}">标记已报销</button>` : ""}
+            <button data-edit="${r.id}">编辑</button>
+            <button class="danger" data-delete="${r.id}">删除</button>
+          </td>
+        </tr>`).join("")}</tbody>
+      </table></div>`;
+      document.querySelectorAll("[data-reimbursed]").forEach(btn => btn.onclick = () => {
+        const r = records.find(row => row.id === btn.dataset.reimbursed);
+        if (r) r.reimburse = "已报销";
+        save(); render();
+      });
+      document.querySelectorAll("[data-edit]").forEach(btn => btn.onclick = () => startEdit(btn.dataset.edit));
+      document.querySelectorAll("[data-delete]").forEach(btn => btn.onclick = () => {
+        if (!confirm("确定删除这条记录吗？")) return;
+        records = records.filter(row => row.id !== btn.dataset.delete);
+        save(); render();
+      });
+    }
+
+    function reimburseTag(value) {
+      if (value === "已报销") return `<span class="tag ok">已报销</span>`;
+      if (value === "未报销") return `<span class="tag warn">未报销</span>`;
+      return `<span class="tag gray">不需报销</span>`;
+    }
+
+    function renderSummary() {
+      const store = els.storeFilter.value;
+      const map = new Map();
+      records.filter(r => inSelectedRange(r.date) && (!store || (r.store || stores[0]) === store)).forEach(r => {
+        const key = r.category || "其他";
+        if (!map.has(key)) map.set(key, { category: key, amount: 0, count: 0 });
+        const row = map.get(key);
+        row.amount += Number(r.amount || 0);
+        row.count += 1;
+      });
+      const rows = [...map.values()].sort((a, b) => b.amount - a.amount);
+      els.summary.innerHTML = rows.length ? `<div class="summary-grid">${rows.map(r => `
+        <div class="sum-card"><strong>${esc(r.category)}</strong><div>${money(r.amount)}</div><div class="sub">${r.count} 笔</div></div>
+      `).join("")}</div>` : `<div class="empty">筛选期间暂无统计</div>`;
+    }
+
+    function renderUndoExport() {
+      const history = loadExportHistory();
+      if (!history.length) {
+        els.exportHistory.innerHTML = `<option value="">暂无可撤回导出</option>`;
+        els.undoExport.disabled = true;
+        return;
+      }
+      const selected = els.exportHistory.value;
+      els.exportHistory.innerHTML = `<option value="">选择撤回记录</option>` + history.map(item => `<option value="${esc(item.id)}">${esc(item.label || exportHistoryLabel(item))}</option>`).join("");
+      if (history.some(item => item.id === selected)) els.exportHistory.value = selected;
+      els.undoExport.disabled = false;
+    }
+
+    els.form.elements.date.value = today();
+    els.startMonth.value = monthKey(today());
+    els.endMonth.value = monthKey(today());
+    els.form.onsubmit = event => {
+      event.preventDefault();
+      const data = Object.fromEntries(new FormData(els.form).entries());
+      const payload = {
+        date: data.date || today(),
+        store: data.store || stores[0],
+        name: data.name.trim(),
+        category: data.category,
+        quantity: Number(data.quantity || 1),
+        unit: (data.unit || "").trim(),
+        amount: Number(data.amount || 0),
+        invoiceType: data.invoiceType,
+        reimburse: data.reimburse
+      };
+      // 自动保存新分类
+      if (payload.category && !categories.includes(payload.category)) {
+        categories.push(payload.category);
+        saveCategories(categories);
+      }
+      if (editingId) {
+        const index = records.findIndex(r => r.id === editingId);
+        if (index >= 0) records[index] = { ...records[index], ...payload };
+      } else {
+        records.push({
+          id: "r_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
+          ...payload
+        });
+      }
+      save();
+      resetForm();
+      render();
+    };
+
+    function startEdit(id) {
+      const r = records.find(row => row.id === id);
+      if (!r) return;
+      editingId = id;
+      els.form.elements.date.value = r.date || today();
+      els.form.elements.store.value = r.store || stores[0];
+      els.form.elements.name.value = r.name || "";
+      els.form.elements.category.value = r.category || "其他";
+      els.form.elements.quantity.value = r.quantity || 1;
+      els.form.elements.unit.value = r.unit || "";
+      els.form.elements.amount.value = r.amount || 0;
+      els.form.elements.invoiceType.value = r.invoiceType || "普票";
+      els.form.elements.reimburse.value = r.reimburse || "未报销";
+      els.submitBtn.textContent = "保存修改";
+      els.cancelEdit.style.display = "";
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+
+    function resetForm() {
+      editingId = "";
+      els.form.reset();
+      els.form.elements.date.value = today();
+      els.form.elements.quantity.value = 1;
+      els.submitBtn.textContent = "保存";
+      els.cancelEdit.style.display = "none";
+    }
+
+    els.cancelEdit.onclick = resetForm;
+
+    [els.startMonth, els.endMonth, els.storeFilter, els.categoryFilter, els.search].forEach(el => el.oninput = render);
+    document.getElementById("clearFilters").onclick = () => {
+      els.startMonth.value = monthKey(today());
+      els.endMonth.value = monthKey(today());
+      els.storeFilter.value = "";
+      els.categoryFilter.value = "";
+      els.search.value = "";
+      render();
+    };
+
+    document.getElementById("exportCsv").onclick = () => {
+      const rows = [["日期", "店/公司", "名称", "分类", "数量", "单位", "金额", "发票类型", "报销状态"], ...records.map(r => [r.date, r.store || stores[0], r.name, r.category, r.quantity, r.unit || "", r.amount, r.invoiceType, r.reimburse])];
+      download(rows.map(row => row.map(v => `"${String(v ?? "").replace(/"/g, '""')}"`).join(",")).join("\n"), "采购记录.csv", "text/csv;charset=utf-8");
+    };
+    document.getElementById("exportShangying").onclick = () => exportReimbursementSheet({
+      store: "上影国际影城翡翠城",
+      company: "四川中玮海润文化传播有限公司",
+      columns: ["报销门店", "明细", "数量", "单位", "金额", "发票类型", "使用途径", "是否入库", "备注"],
+      filePrefix: "上影报销单"
+    });
+    document.getElementById("exportJiayi").onclick = () => exportReimbursementSheet({
+      store: "绵阳佳翼商管",
+      company: "四川佳翼海润商业管理有限公司",
+      columns: ["报销门店", "明细", "数量", "单位", "金额", "发票类型", "备注"],
+      filePrefix: "佳翼报销单"
+    });
+    document.getElementById("exportJson").onclick = () => {
+      download(JSON.stringify(records, null, 2), "采购记录备份.json", "application/json");
+    };
+    els.undoExport.onclick = () => {
+      const history = loadExportHistory();
+      const selectedId = els.exportHistory.value;
+      const selected = history.find(item => item.id === selectedId);
+      if (!selected) {
+        alert("请先选择要撤回的导出记录。");
+        return;
+      }
+      const idSet = new Set(selected.ids);
+      let restored = 0;
+      records = records.map(r => {
+        if (idSet.has(r.id) && r.reimburse === "已报销") {
+          restored += 1;
+          return { ...r, reimburse: "未报销" };
+        }
+        return r;
+      });
+      saveExportHistory(history.filter(item => item.id !== selected.id));
+      save();
+      render();
+      alert(`已撤回本次导出，恢复 ${restored} 条为未报销。`);
+    };
+    els.restoreFilteredReimbursed.onclick = () => {
+      const range = selectedRange();
+      const store = els.storeFilter.value;
+      if (!store) {
+        alert("请先选择要恢复的门店/公司。");
+        return;
+      }
+      const matches = records.filter(r => inSelectedRange(r.date) && (r.store || stores[0]) === store && r.reimburse === "已报销");
+      if (!matches.length) {
+        alert(`${store} ${range.label} 没有已报销记录可恢复。`);
+        return;
+      }
+      if (!confirm(`确定把 ${store} ${range.label} 的 ${matches.length} 条已报销记录恢复为未报销吗？`)) return;
+      const ids = new Set(matches.map(r => r.id));
+      records = records.map(r => ids.has(r.id) ? { ...r, reimburse: "未报销" } : r);
+      save();
+      render();
+      alert(`已恢复 ${matches.length} 条为未报销。`);
+    };
+    document.getElementById("importBtn").onclick = () => document.getElementById("importFile").click();
+    document.getElementById("importFile").onchange = event => {
+      const file = event.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        try {
+          const data = JSON.parse(reader.result);
+          if (!Array.isArray(data)) throw new Error("invalid");
+          if (records.length && !confirm("导入会覆盖当前记录，确定继续吗？")) return;
+          records = data;
+          save(); render();
+        } catch {
+          alert("JSON格式不正确");
+        }
+      };
+      reader.readAsText(file);
+    };
+    function download(content, name, type) {
+      const blob = new Blob(["\ufeff" + content], { type });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = name; a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    function exportReimbursementSheet(config) {
+      const range = selectedRange();
+      const rows = records
+        .filter(r => inSelectedRange(r.date) && (r.store || stores[0]) === config.store && r.reimburse === "未报销");
+      if (!rows.length) {
+        alert(`${config.store} ${range.label} 没有未报销记录`);
+        return;
+      }
+      const total = rows.reduce((sum, r) => sum + Number(r.amount || 0), 0);
+      const html = reimbursementHtml(config, rows, total, range.label);
+      download(html, `${config.filePrefix}-${range.label}.xls`, "application/vnd.ms-excel;charset=utf-8");
+      const ids = new Set(rows.map(r => r.id));
+      records = records.map(r => ids.has(r.id) ? { ...r, reimburse: "已报销" } : r);
+      const exportedAt = new Date().toISOString();
+      const exportItem = {
+        id: "export_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
+        ids: [...ids],
+        store: config.store,
+        filePrefix: config.filePrefix,
+        period: range.label,
+        count: rows.length,
+        total,
+        exportedAt
+      };
+      exportItem.label = exportHistoryLabel(exportItem);
+      saveExportHistory([exportItem, ...loadExportHistory()]);
+      save();
+      render();
+      alert(`已导出 ${rows.length} 条，并标记为已报销。如发现问题，可在下拉框选择该导出记录后撤回。`);
+    }
+
+    function exportHistoryLabel(item) {
+      const time = item.exportedAt ? formatDateTime(item.exportedAt) : "旧版记录";
+      const store = item.store || item.filePrefix || "导出记录";
+      const period = item.period || "";
+      const count = item.count || item.ids.length;
+      const total = item.total != null ? ` · ${money(item.total)}` : "";
+      return `${time} · ${store} · ${period} · ${count}条${total}`;
+    }
+
+    function formatDateTime(value) {
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return String(value || "");
+      const pad = n => String(n).padStart(2, "0");
+      return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+    }
+
+    function reimbursementHtml(config, rows, total, period) {
+      const colCount = config.columns.length;
+      const isShangying = colCount === 9;
+      const widths = isShangying
+        ? [74, 150, 77, 52, 52, 58, 270, 52, 81]
+        : [82, 165, 77, 52, 52, 58, 170];
+      const header = row(config.columns.map(c => cell(c, "Header")), "20.1");
+      const body = rows.map((r, index) => {
+        const companyCell = index === 0 ? cell(config.company, "Wrap", { mergeDown: rows.length - 1 }) : "";
+        const detailCells = [
+          index === 0 ? cell(r.name) : cellAt(2, r.name),
+          cell(formatNumber(r.quantity)),
+          cell(r.unit || ""),
+          cell(Number(r.amount || 0).toFixed(2), "Amount"),
+          cell(r.invoiceType || "普票")
+        ].join("");
+        if (isShangying) {
+          const stockCell = index === 0 ? cell("否", undefined, { mergeDown: rows.length - 1 }) : "";
+          const remarkCell = index === 0 ? cell("", "Wrap", { mergeDown: rows.length - 1 }) : "";
+          return row(`${companyCell}${detailCells}${cell(usePurpose(r))}${stockCell}${remarkCell}`, "20.1");
+        }
+        const remarkCell = index === 0 ? cell(usePurpose(rows[0]), "Wrap", { mergeDown: rows.length - 1 }) : "";
+        return row(`${companyCell}${detailCells}${remarkCell}`, "20.1");
+      }).join("");
+      const amountMerge = isShangying ? 2 : 3;
+      const reimburserIndex = isShangying ? 5 : 6;
+      const managerMerge = isShangying ? 3 : 4;
+      const financeIndex = isShangying ? 5 : 6;
+      const dateIndex = isShangying ? 7 : 6;
+      const dateMerge = isShangying ? 2 : 1;
+      const columns = widths.map(width => `<Column ss:AutoFitWidth="0" ss:Width="${width}"/>`).join("");
+      const summaryLine = row(`${cell(`合计报销金额：${Number(total).toFixed(2)}元`, "Line", { mergeAcross: isShangying ? 3 : 2 })}${cellAt(dateIndex, formatExportPeriod(period), "DateRight", { mergeAcross: dateMerge })}`, "18.2");
+      const amountLine = row(`${cell(`金额大写： ${uppercaseRmb(total)}`, "TextLeft", { mergeAcross: amountMerge })}${cellAt(reimburserIndex, "报销人：", "Default")}`, "29.65");
+      const signLine = row(`${cell("店长签字：", "Default", { mergeAcross: managerMerge })}${cellAt(financeIndex, "财务签字：", "Default")}`, "23.1");
+      return `<?xml version="1.0" encoding="UTF-8"?>
+<?mso-application progid="Excel.Sheet"?>
+<Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet"
+ xmlns:o="urn:schemas-microsoft-com:office:office"
+ xmlns:x="urn:schemas-microsoft-com:office:excel"
+ xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet"
+ xmlns:html="http://www.w3.org/TR/REC-html40">
+ <Styles>
+  <Style ss:ID="Default" ss:Name="Normal">
+   <Alignment ss:Horizontal="Center" ss:Vertical="Center"/>
+   <Borders>
+    <Border ss:Position="Bottom" ss:LineStyle="Continuous" ss:Weight="1"/>
+    <Border ss:Position="Left" ss:LineStyle="Continuous" ss:Weight="1"/>
+    <Border ss:Position="Right" ss:LineStyle="Continuous" ss:Weight="1"/>
+    <Border ss:Position="Top" ss:LineStyle="Continuous" ss:Weight="1"/>
+   </Borders>
+   <Font ss:FontName="等线" ss:Size="11"/>
+  </Style>
+  <Style ss:ID="Title" ss:Parent="Default"><Font ss:FontName="等线" ss:Size="18"/></Style>
+  <Style ss:ID="Line" ss:Parent="Default"><Alignment ss:Horizontal="Left" ss:Vertical="Top"/><Font ss:FontName="等线" ss:Size="11"/></Style>
+  <Style ss:ID="DateRight" ss:Parent="Default"><Alignment ss:Horizontal="Right" ss:Vertical="Top"/><Font ss:FontName="等线" ss:Size="11"/></Style>
+  <Style ss:ID="Header" ss:Parent="Default"/>
+  <Style ss:ID="Wrap" ss:Parent="Default"><Alignment ss:Horizontal="Center" ss:Vertical="Center" ss:WrapText="1"/></Style>
+  <Style ss:ID="TextLeft" ss:Parent="Default"><Alignment ss:Horizontal="Left" ss:Vertical="Center"/></Style>
+  <Style ss:ID="Amount" ss:Parent="Default"><NumberFormat ss:Format="0.00"/></Style>
+ </Styles>
+ <Worksheet ss:Name="Sheet1">
+  <Table ss:ExpandedColumnCount="${colCount}" ss:ExpandedRowCount="${rows.length + 5}" x:FullColumns="1" x:FullRows="1" ss:DefaultRowHeight="20.1">
+   ${columns}
+   ${row(cell("费用报销单", "Title", { mergeAcross: colCount - 1 }), "29.65")}
+   ${summaryLine}
+   ${header}
+   ${body}
+   ${amountLine}
+   ${signLine}
+  </Table>
+  <WorksheetOptions xmlns="urn:schemas-microsoft-com:office:excel">
+   <PageSetup><Layout x:Orientation="Landscape"/><Header x:Margin="0.3"/><Footer x:Margin="0.3"/><PageMargins x:Bottom="0.751388888888889" x:Left="0.700694444444445" x:Right="0.700694444444445" x:Top="0.751388888888889"/></PageSetup>
+   <Print><ValidPrinterInfo/><PaperSizeIndex>9</PaperSizeIndex><HorizontalResolution>600</HorizontalResolution><VerticalResolution>600</VerticalResolution></Print>
+   <Selected/>
+   <ProtectObjects>False</ProtectObjects>
+   <ProtectScenarios>False</ProtectScenarios>
+  </WorksheetOptions>
+ </Worksheet>
+</Workbook>`;
+    }
+
+    function row(cells, height) {
+      return `<Row ss:AutoFitHeight="0" ss:Height="${height}">${Array.isArray(cells) ? cells.join("") : cells}</Row>`;
+    }
+
+    function cell(value, style = "Default", options = {}) {
+      const attrs = [
+        style ? `ss:StyleID="${style}"` : "",
+        options.mergeAcross ? `ss:MergeAcross="${options.mergeAcross}"` : "",
+        options.mergeDown ? `ss:MergeDown="${options.mergeDown}"` : ""
+      ].filter(Boolean).join(" ");
+      return `<Cell ${attrs}><Data ss:Type="String">${xmlEsc(value)}</Data></Cell>`;
+    }
+
+    function cellAt(index, value, style, options = {}) {
+      return cell(value, style, { ...options, index }).replace("<Cell ", `<Cell ss:Index="${index}" `);
+    }
+
+    function xmlEsc(value) {
+      return String(value ?? "").replace(/[<>&"']/g, s => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;", "'": "&apos;" }[s]));
+    }
+
+    function formatNumber(value) {
+      const n = Number(value || 0);
+      return Number.isInteger(n) ? String(n) : String(n);
+    }
+
+    function formatExportPeriod(period) {
+      const text = String(period || "");
+      const formatMonth = value => {
+        const match = value.match(/^(\d{4})-(\d{2})$/);
+        return match ? `${match[1]}年 ${Number(match[2])}月` : value;
+      };
+      if (text.includes("至")) {
+        return text.split("至").map(formatMonth).join("至");
+      }
+      return formatMonth(text);
+    }
+
+    function uppercaseRmb(value) {
+      const digits = ["零", "壹", "贰", "叁", "肆", "伍", "陆", "柒", "捌", "玖"];
+      const units = ["", "拾", "佰", "仟", "万", "拾", "佰", "仟", "亿"];
+      const amount = Math.round(Number(value || 0) * 100);
+      const yuan = Math.floor(amount / 100);
+      const jiao = Math.floor((amount % 100) / 10);
+      const fen = amount % 10;
+      const yuanText = String(yuan).split("").reverse().map((char, index) => {
+        const n = Number(char);
+        if (n === 0) return "";
+        return digits[n] + units[index];
+      }).reverse().join("  ") || "零元";
+      return `${yuanText}元  ${digits[jiao]}角  ${digits[fen]}分`;
+    }
+
+    function usePurpose(record) {
+      const map = {
+        "办公行政": "办公使用",
+        "消防安全": "消防使用",
+        "保洁清洁": "保洁使用",
+        "设备备件": "设备维护使用",
+        "营运耗材": "日常营运使用",
+        "其他": "日常使用"
+      };
+      return map[record.category] || "日常使用";
+    }
+
+    // ========== 分类管理 ==========
+    const modal = document.getElementById("categoryModal");
+    const categoryListEl = document.getElementById("categoryListManage");
+    const newCategoryInput = document.getElementById("newCategoryInput");
+
+    function renderCategoryModal() {
+      categoryListEl.innerHTML = categories.map((c, i) => `
+        <div style="display:flex; align-items:center; gap:8px; padding:6px 0; border-bottom:1px solid var(--line);">
+          <span style="flex:1;">${esc(c)}</span>
+          <button class="danger" onclick="deleteCategory(${i})" style="padding:4px 10px; height:auto; font-size:12px;">删除</button>
+        </div>
+      `).join("");
+    }
+
+    function deleteCategory(index) {
+      const name = categories[index];
+      const used = records.some(r => r.category === name);
+      if (used) {
+        if (!confirm(`分类"${name}"已有采购记录使用，确定删除吗？\n（已有记录的分类不会改变）`)) return;
+      }
+      categories.splice(index, 1);
+      saveCategories(categories);
+      renderCategoryModal();
+      render();
+    }
+
+    document.getElementById("addCategoryBtn").onclick = () => {
+      const val = newCategoryInput.value.trim();
+      if (!val) return;
+      if (categories.includes(val)) {
+        alert("该分类已存在");
+        return;
+      }
+      categories.push(val);
+      saveCategories(categories);
+      newCategoryInput.value = "";
+      renderCategoryModal();
+      render();
+    };
+
+    document.getElementById("manageCategoryBtn").onclick = () => {
+      renderCategoryModal();
+      modal.style.display = "flex";
+    };
+
+    document.getElementById("closeCategoryModal").onclick = () => {
+      modal.style.display = "none";
+    };
+
+    modal.onclick = (e) => {
+      if (e.target === modal) modal.style.display = "none";
+    };
+
+    render();
+  </script>
+</body>
+</html>
